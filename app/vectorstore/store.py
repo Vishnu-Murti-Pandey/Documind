@@ -1,0 +1,69 @@
+"""
+Insert vectors into Qdrant.
+"""
+
+import uuid
+
+from qdrant_client.models import PointStruct
+
+from app.models.vector_document import VectorDocument
+from app.vectorstore.client import VectorClient
+from app.vectorstore.collection import COLLECTION_NAME
+from app.vectorstore.sparse_encoder import SparseEncoder
+from qdrant_client.models import SparseVector
+
+
+class VectorStore:
+
+    def __init__(self):
+
+        self.client = VectorClient().client
+        self.sparse = SparseEncoder()
+
+    def insert(
+        self,
+        document: VectorDocument,
+    ) -> None:
+
+        # ------------------------------------------
+        # Generate sparse embedding
+        # ------------------------------------------
+
+        sparse_embedding = self.sparse.encode(
+            document.chunk_text
+        )
+
+        payload = {
+            "chunk_id": document.chunk_id,
+            "paper_name": document.paper_name,
+            "section_title": document.section_title,
+            "chunk_text": document.chunk_text,
+            "page_start": document.metadata["page_start"],
+            "page_end": document.metadata["page_end"],
+            "token_count": document.metadata["token_count"],
+            "images": document.images,
+            "tables": document.tables,
+        }
+
+        point = PointStruct(
+            id=str(
+                uuid.uuid5(
+                    uuid.NAMESPACE_DNS,
+                    f"{document.paper_name}:{document.chunk_id}",
+                )
+            ),
+            vector={
+                "dense": document.embedding,
+                "sparse": SparseVector(
+                    indices=sparse_embedding.indices.tolist(),
+                    values=sparse_embedding.values.tolist(),
+                ),
+            },
+            payload=payload,
+        )
+
+        self.client.upsert(
+            collection_name=COLLECTION_NAME,
+            wait=True,
+            points=[point],
+        )

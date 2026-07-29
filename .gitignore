@@ -1,0 +1,23 @@
+# Python cache
+__pycache__/
+
+# Virtual environment
+.venv/
+
+# Environment variables
+.env
+
+# VS Code
+.vscode/
+
+# PyCharm
+.idea/
+
+# Output files
+data/output/
+
+# Extracted images
+data/images/
+
+# Logs
+*.log
