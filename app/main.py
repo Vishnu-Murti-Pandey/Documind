@@ -24,6 +24,9 @@ from app.db.session import (
 from app.api.routes.conversations import (
     router as conversations_router,
 )
+from app.api.routes.ingestion import (
+    router as ingestion_router,
+)
 
 
 @asynccontextmanager
@@ -58,6 +61,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(
+    ingestion_router,
+    prefix="/api",
+)
 
 app.include_router(
     chat_router,
