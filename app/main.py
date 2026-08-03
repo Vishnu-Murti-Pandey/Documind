@@ -1,109 +1,87 @@
-from pathlib import Path
+"""
+FastAPI application entry point.
+"""
 
-from app.chunking.chunker import DocumentChunker
-from app.embedding.embedding_builder import EmbeddingBuilder
-from app.embedding.embedding_generator import EmbeddingGenerator
-from app.enrichment.image_enricher import ImageEnricher
-from app.enrichment.table_enricher import TableEnricher
-from app.parser.pdf_parser import PDFParser
-from app.vectorstore.collection import CollectionManager
-from app.vectorstore.store import VectorStore
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
-def main():
-
-    # --------------------------------------------------
-    # Input PDF
-    # --------------------------------------------------
-
-    pdf_path = Path(
-        "data/input/attention-is-all-you-need-Paper.pdf"
-    )
-
-    paper_name = pdf_path.stem
-
-    # --------------------------------------------------
-    # Parse PDF
-    # --------------------------------------------------
-
-    parser = PDFParser(pdf_path)
-
-    elements = parser.parse_to_json()
-
-    print(f"Parsed {len(elements)} elements")
-
-    # --------------------------------------------------
-    # Chunk Document
-    # --------------------------------------------------
-
-    chunker = DocumentChunker()
-
-    chunks = chunker.create_chunks(
-        elements=elements,
-        paper_name=paper_name,
-    )
-
-    print(f"Created {len(chunks)} chunks")
-
-    # --------------------------------------------------
-    # Initialize Services
-    # --------------------------------------------------
-
-    image_enricher = ImageEnricher()
-
-    table_enricher = TableEnricher()
-
-    embedding_builder = EmbeddingBuilder()
-
-    embedding_generator = EmbeddingGenerator()
-
-    collection_manager = CollectionManager()
-
-    vector_store = VectorStore()
-
-    # --------------------------------------------------
-    # Create Collection (Only if it doesn't exist)
-    # --------------------------------------------------
-
-    collection_manager.create()
-
-    # --------------------------------------------------
-    # Process Every Chunk
-    # --------------------------------------------------
-
-    for index, chunk in enumerate(chunks, start=1):
-
-        print(
-            f"\nProcessing Chunk {index}/{len(chunks)} "
-            f"({chunk['chunk_id']})"
-        )
-
-        # Enrich Images
-        chunk = image_enricher.enrich_chunk(chunk)
-
-        # Enrich Tables
-        chunk = table_enricher.enrich_chunk(chunk)
-
-        # Build Embedding Document
-        embedding_document = embedding_builder.build_document(
-            chunk
-        )
-
-        # Generate Embedding
-        vector_document = embedding_generator.generate(
-            embedding_document
-        )
-
-        # Store in Qdrant
-        vector_store.insert(vector_document)
-
-        print("✓ Stored in Qdrant")
-
-    print("\n========================================")
-    print("Pipeline completed successfully.")
-    print(f"Total chunks stored: {len(chunks)}")
-    print("========================================")
+from app.api.routes.assets import (
+    router as assets_router,
+)
+from app.api.routes.health import (
+    router as health_router,
+)
+from app.api.routes.chat import (
+    router as chat_router,
+)
+from app.db.session import (
+    create_database_tables,
+    dispose_engine,
+)
+from app.api.routes.conversations import (
+    router as conversations_router,
+)
 
 
-if __name__ == "__main__":
-    main()
+@asynccontextmanager
+async def lifespan(
+    app: FastAPI,
+) -> AsyncGenerator[None, None]:
+    """
+    FastAPI startup and shutdown lifecycle.
+    """
+
+    # Create PostgreSQL tables that do not already exist.
+    await create_database_tables()
+
+    yield
+
+    # Close database connections cleanly.
+    await dispose_engine()
+
+
+app = FastAPI(
+    title="Multimodal RAG API",
+    version="1.0.0",
+    lifespan=lifespan,
+)
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+app.include_router(
+    chat_router,
+    prefix="/api",
+)
+
+app.include_router(
+    assets_router,
+    prefix="/api",
+)
+
+app.include_router(
+    conversations_router,
+    prefix="/api",
+)
+
+app.include_router(
+    health_router,
+    prefix="/api",
+)
+
+
+@app.get("/")
+async def root():
+    return {
+        "message": "Multimodal RAG API is running",
+    }

@@ -14,9 +14,7 @@ class AssetBuilder:
         seen_tables = set()
 
         for result in results:
-
             for table in result.tables:
-
                 html = table.get("html")
 
                 if not html:
@@ -26,17 +24,16 @@ class AssetBuilder:
                     continue
 
                 tables.append(
-
                     TableReference(
-
+                        score=result.score,
                         chunk_id=result.chunk_id,
-
+                        paper_name=result.paper_name,
+                        section_title=result.section_title,
+                        page_start=result.page_start,
+                        page_end=result.page_end,
                         summary=table.get("summary"),
-
                         html=html,
-
                     )
-
                 )
 
                 seen_tables.add(html)

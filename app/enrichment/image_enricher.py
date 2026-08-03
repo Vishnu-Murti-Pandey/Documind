@@ -19,7 +19,7 @@ class ImageEnricher:
 
     def __init__(self):
 
-        self.storage = MinioStorage()
+        self.storage = MinioStorage(create_bucket=True)
         self.openai = OpenAIClient().client
 
     def enrich_chunk(

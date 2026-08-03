@@ -1,12 +1,10 @@
 """
 MinIO Storage Client.
 
-Responsible for uploading and downloading assets.
-
-The rest of the application should never directly
-interact with MinIO.
+Responsible for interacting with MinIO object storage.
 """
 
+from datetime import timedelta
 from io import BytesIO
 
 from minio import Minio
@@ -21,7 +19,10 @@ from app.config import (
 
 class MinioStorage:
 
-    def __init__(self):
+    def __init__(
+        self,
+        create_bucket: bool = False,
+    ) -> None:
 
         self.bucket_name = MINIO_BUCKET
 
@@ -32,9 +33,18 @@ class MinioStorage:
             secure=False,
         )
 
-        self._create_bucket()
+        if create_bucket:
+            self.ensure_bucket_exists()
 
-    def _create_bucket(self):
+    def ensure_bucket_exists(
+        self,
+    ) -> None:
+        """
+        Create the configured bucket if it does not exist.
+
+        Use this during ingestion or explicit initialization,
+        not when serving normal asset requests.
+        """
 
         if not self.client.bucket_exists(
             self.bucket_name
@@ -50,6 +60,8 @@ class MinioStorage:
         image_name: str,
         content_type: str,
     ) -> str:
+
+        self.ensure_bucket_exists()
 
         object_name = (
             f"{paper_name}/images/{image_name}"
@@ -75,9 +87,22 @@ class MinioStorage:
             object_name,
         )
 
-        data = response.read()
+        try:
+            return response.read()
+        finally:
+            response.close()
+            response.release_conn()
 
-        response.close()
-        response.release_conn()
+    def get_presigned_url(
+        self,
+        object_name: str,
+        expires_minutes: int = 15,
+    ) -> str:
 
-        return data
+        return self.client.presigned_get_object(
+            bucket_name=self.bucket_name,
+            object_name=object_name,
+            expires=timedelta(
+                minutes=expires_minutes
+            ),
+        )
