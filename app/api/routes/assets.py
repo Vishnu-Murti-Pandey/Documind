@@ -2,7 +2,8 @@
 Asset delivery routes.
 
 The frontend uses stable FastAPI URLs.
-A fresh MinIO presigned URL is generated for every request.
+FastAPI checks that the object exists before generating
+a temporary MinIO URL.
 """
 
 import asyncio
@@ -28,23 +29,29 @@ router = APIRouter(
 
 @lru_cache
 def get_minio_storage() -> MinioStorage:
-    """
-    Create MinIOStorage lazily on the first asset request.
-
-    This prevents FastAPI from crashing during module import
-    if MinIO is temporarily unavailable.
-    """
-
     return MinioStorage()
 
 
 @router.get("/{object_path:path}")
 async def get_asset(
     object_path: str,
-    storage: MinioStorage = Depends(get_minio_storage),
+    storage: MinioStorage = Depends(
+        get_minio_storage
+    ),
 ) -> RedirectResponse:
 
     try:
+        exists = await asyncio.to_thread(
+            storage.object_exists,
+            object_path,
+        )
+
+        if not exists:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Asset not found.",
+            )
+
         presigned_url = await asyncio.to_thread(
             storage.get_presigned_url,
             object_path,
@@ -55,12 +62,15 @@ async def get_asset(
             status_code=status.HTTP_307_TEMPORARY_REDIRECT,
         )
 
-    except S3Error as exc:
+    except HTTPException:
+        raise
 
+    except S3Error as exc:
         if exc.code in {
             "NoSuchKey",
-            "NoSuchBucket",
             "NoSuchObject",
+            "NoSuchBucket",
+            "NotFound",
         }:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -73,8 +83,12 @@ async def get_asset(
             "SignatureDoesNotMatch",
         }:
             raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Asset storage authentication failed.",
+                status_code=(
+                    status.HTTP_503_SERVICE_UNAVAILABLE
+                ),
+                detail=(
+                    "Asset storage authentication failed."
+                ),
             ) from exc
 
         raise HTTPException(

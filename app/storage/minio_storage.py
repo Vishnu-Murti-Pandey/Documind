@@ -6,6 +6,8 @@ Responsible for interacting with MinIO object storage.
 
 from datetime import timedelta
 from io import BytesIO
+from minio.deleteobjects import DeleteObject
+from minio.error import S3Error
 
 from minio import Minio
 
@@ -106,3 +108,99 @@ class MinioStorage:
                 minutes=expires_minutes
             ),
         )
+        
+    def delete_object(
+        self,
+        object_name: str,
+    ) -> None:
+
+        self.client.remove_object(
+            bucket_name=self.bucket_name,
+            object_name=object_name,
+        )
+
+
+    def delete_prefix(
+        self,
+        prefix: str,
+    ) -> int:
+        """
+        Delete every MinIO object under a prefix.
+
+        Example:
+            attention-paper/
+        """
+
+        objects = self.client.list_objects(
+            bucket_name=self.bucket_name,
+            prefix=prefix,
+            recursive=True,
+        )
+
+        object_names = [
+            item.object_name
+            for item in objects
+        ]
+
+        if not object_names:
+            return 0
+
+        errors = self.client.remove_objects(
+            bucket_name=self.bucket_name,
+            delete_object_list=(
+                DeleteObject(object_name)
+                for object_name in object_names
+            ),
+        )
+
+        errors_list = list(errors)
+
+        if errors_list:
+            first_error = errors_list[0]
+
+            raise RuntimeError(
+                f"Failed to delete MinIO object: "
+                f"{first_error.object_name}"
+            )
+
+        return len(object_names)
+
+
+    def delete_paper_assets(
+        self,
+        paper_name: str,
+    ) -> int:
+        """
+        Delete all assets belonging to one paper.
+        """
+
+        return self.delete_prefix(
+            f"{paper_name}/"
+        )
+        
+    def object_exists(
+        self,
+        object_name: str,
+    ) -> bool:
+        """
+        Check whether an object exists in the configured bucket.
+        """
+
+        try:
+            self.client.stat_object(
+                bucket_name=self.bucket_name,
+                object_name=object_name,
+            )
+
+            return True
+
+        except S3Error as exc:
+            if exc.code in {
+                "NoSuchKey",
+                "NoSuchObject",
+                "NoSuchBucket",
+                "NotFound",
+            }:
+                return False
+
+            raise

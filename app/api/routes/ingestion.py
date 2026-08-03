@@ -1,5 +1,12 @@
 """
-Streaming document-ingestion API.
+Streaming ingestion route with:
+
+- upload-size protection
+- PDF signature validation
+- duplicate protection
+- overwrite support
+- PostgreSQL status tracking
+- failed-ingestion cleanup
 """
 
 import asyncio
@@ -11,15 +18,27 @@ from pathlib import Path
 
 from fastapi import (
     APIRouter,
+    Depends,
     File,
     HTTPException,
+    Query,
     UploadFile,
     status,
 )
 from fastapi.responses import StreamingResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.sse import sse_event
+from app.config import (
+    MAX_UPLOAD_SIZE_BYTES,
+    MAX_UPLOAD_SIZE_MB,
+)
+from app.db.session import get_db_session
 from app.ingest import IngestionPipeline
+from app.services.document_service import (
+    DocumentService,
+    DuplicateDocumentError,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -34,13 +53,8 @@ router = APIRouter(
 def sanitize_paper_name(
     filename: str,
 ) -> str:
-    """
-    Convert an uploaded filename into a safe paper identifier.
-    """
 
-    name = Path(
-        filename
-    ).stem.strip()
+    name = Path(filename).stem.strip()
 
     name = re.sub(
         r"[^A-Za-z0-9._-]+",
@@ -55,105 +69,187 @@ def sanitize_paper_name(
     return name or "research-paper"
 
 
-async def save_upload_to_temp(
+async def save_and_validate_pdf(
     upload: UploadFile,
-) -> Path:
+) -> tuple[Path, int]:
     """
-    Save the uploaded PDF to a temporary path.
+    Save an uploaded PDF while enforcing the size limit.
 
-    NamedTemporaryFile(delete=False) is used because Windows does
-    not allow every library to reopen a file that is still open.
-    """
-
-    suffix = Path(
-        upload.filename or "document.pdf"
-    ).suffix.lower()
-
-    with tempfile.NamedTemporaryFile(
-        mode="wb",
-        suffix=suffix,
-        prefix="rag-ingestion-",
-        delete=False,
-    ) as temporary_file:
-        temporary_path = Path(
-            temporary_file.name
-        )
-
-        while True:
-            data = await upload.read(
-                1024 * 1024
-            )
-
-            if not data:
-                break
-
-            await asyncio.to_thread(
-                temporary_file.write,
-                data,
-            )
-
-    await upload.close()
-
-    return temporary_path
-
-
-@router.post("/stream")
-async def stream_ingestion(
-    file: UploadFile = File(...),
-) -> StreamingResponse:
-    """
-    Upload and ingest one PDF while streaming progress using SSE.
-
-    Event types:
-    - upload
-    - started
-    - status
-    - chunk_progress
-    - completed
-    - error
+    Validation includes:
+    - .pdf extension
+    - PDF content type
+    - %PDF file signature
+    - maximum upload size
     """
 
-    filename = file.filename or ""
+    filename = upload.filename or ""
 
-    if not filename.lower().endswith(
-        ".pdf"
-    ):
+    if not filename.lower().endswith(".pdf"):
         raise HTTPException(
-            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            status_code=(
+                status.HTTP_415_UNSUPPORTED_MEDIA_TYPE
+            ),
             detail="Only PDF files are supported.",
         )
 
-    if file.content_type not in {
+    if upload.content_type not in {
         "application/pdf",
         "application/octet-stream",
         None,
     }:
         raise HTTPException(
-            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            status_code=(
+                status.HTTP_415_UNSUPPORTED_MEDIA_TYPE
+            ),
             detail="Invalid PDF content type.",
         )
 
-    temporary_path = await save_upload_to_temp(
-        file
+    temporary_path: Path | None = None
+    total_size = 0
+    first_bytes = b""
+
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            suffix=".pdf",
+            prefix="rag-ingestion-",
+            delete=False,
+        ) as temporary_file:
+
+            temporary_path = Path(
+                temporary_file.name
+            )
+
+            while True:
+                chunk = await upload.read(
+                    1024 * 1024
+                )
+
+                if not chunk:
+                    break
+
+                if not first_bytes:
+                    first_bytes = chunk[:8]
+
+                total_size += len(chunk)
+
+                if total_size > MAX_UPLOAD_SIZE_BYTES:
+                    raise HTTPException(
+                        status_code=(
+                            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
+                        ),
+                        detail=(
+                            f"PDF exceeds the "
+                            f"{MAX_UPLOAD_SIZE_MB} MB limit."
+                        ),
+                    )
+
+                temporary_file.write(
+                    chunk
+                )
+
+        if total_size == 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Uploaded PDF is empty.",
+            )
+
+        if not first_bytes.startswith(
+            b"%PDF-"
+        ):
+            raise HTTPException(
+                status_code=(
+                    status.HTTP_415_UNSUPPORTED_MEDIA_TYPE
+                ),
+                detail=(
+                    "The uploaded file is not a valid PDF."
+                ),
+            )
+
+        return (
+            temporary_path,
+            total_size,
+        )
+
+    except Exception:
+        if temporary_path:
+            temporary_path.unlink(
+                missing_ok=True
+            )
+
+        raise
+
+    finally:
+        await upload.close()
+
+
+@router.post("/stream")
+async def stream_ingestion(
+    file: UploadFile = File(...),
+    overwrite: bool = Query(
+        default=False,
+    ),
+    session: AsyncSession = Depends(
+        get_db_session
+    ),
+) -> StreamingResponse:
+
+    filename = file.filename or "document.pdf"
+
+    temporary_path, file_size_bytes = (
+        await save_and_validate_pdf(file)
     )
 
     paper_name = sanitize_paper_name(
         filename
     )
 
+    document_service = DocumentService(
+        session
+    )
+
+    try:
+        document = (
+            await document_service.prepare_ingestion(
+                paper_name=paper_name,
+                original_filename=filename,
+                file_size_bytes=file_size_bytes,
+                overwrite=overwrite,
+            )
+        )
+
+    except DuplicateDocumentError as exc:
+        temporary_path.unlink(
+            missing_ok=True
+        )
+
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This document already exists. "
+                "Use overwrite=true to ingest it again."
+            ),
+        ) from exc
+
     pipeline = IngestionPipeline()
 
     async def event_generator(
     ) -> AsyncGenerator[str, None]:
+
+        completed = False
+
         try:
+            await document_service.mark_processing(
+                document
+            )
+
             yield sse_event(
-                "upload",
+                "document",
                 {
-                    "status": "completed",
-                    "filename": filename,
+                    "document_id": str(document.id),
                     "paper_name": paper_name,
-                    "message": "PDF uploaded successfully.",
-                    "progress": 0,
+                    "status": "processing",
+                    "overwrite": overwrite,
                 },
             )
 
@@ -161,45 +257,118 @@ async def stream_ingestion(
                 pdf_path=temporary_path,
                 paper_name=paper_name,
             ):
+                event_type = event["type"]
+                event_data = event["data"]
+
+                if event_type == "completed":
+                    await document_service.mark_completed(
+                        document=document,
+                        elements_count=event_data.get(
+                            "elements_count",
+                            0,
+                        ),
+                        chunks_count=event_data.get(
+                            "chunks_stored",
+                            0,
+                        ),
+                    )
+
+                    completed = True
+
+                    event_data["document_id"] = str(
+                        document.id
+                    )
+
+                elif event_type == "error":
+                    error_message = event_data.get(
+                        "detail",
+                        event_data.get(
+                            "message",
+                            "Unknown ingestion failure.",
+                        ),
+                    )
+
+                    # Clean partially written Qdrant/MinIO data.
+                    try:
+                        await document_service.cleanup_document_data(
+                            paper_name
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Failed to clean partial ingestion data."
+                        )
+
+                    await document_service.mark_failed(
+                        document=document,
+                        error_message=error_message,
+                    )
+
                 yield sse_event(
-                    event["type"],
-                    event["data"],
+                    event_type,
+                    event_data,
                 )
 
         except asyncio.CancelledError:
-            logger.info(
+            logger.warning(
                 "Ingestion client disconnected for %s.",
                 paper_name,
             )
+
+            if not completed:
+                try:
+                    await document_service.mark_failed(
+                        document=document,
+                        error_message=(
+                            "Ingestion connection was cancelled."
+                        ),
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to mark ingestion as failed."
+                    )
 
             raise
 
         except Exception as exc:
             logger.exception(
-                "Ingestion route failed for %s.",
+                "Ingestion failed for %s.",
                 paper_name,
             )
+
+            try:
+                await document_service.cleanup_document_data(
+                    paper_name
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to clean partial document data."
+                )
+
+            try:
+                await document_service.mark_failed(
+                    document=document,
+                    error_message=str(exc),
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to persist ingestion failure."
+                )
 
             yield sse_event(
                 "error",
                 {
-                    "status": "failed",
+                    "document_id": str(document.id),
                     "paper_name": paper_name,
+                    "status": "failed",
                     "message": "Document ingestion failed.",
                     "detail": str(exc),
                 },
             )
 
         finally:
-            try:
-                temporary_path.unlink(
-                    missing_ok=True
-                )
-            except OSError:
-                logger.warning(
-                    "Could not remove temporary file: %s",
-                    temporary_path,
-                )
+            temporary_path.unlink(
+                missing_ok=True
+            )
 
     return StreamingResponse(
         event_generator(),

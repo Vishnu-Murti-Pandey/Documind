@@ -27,6 +27,9 @@ from app.api.routes.conversations import (
 from app.api.routes.ingestion import (
     router as ingestion_router,
 )
+from app.api.routes.documents import (
+    router as documents_router,
+)
 
 
 @asynccontextmanager
@@ -68,6 +71,11 @@ app.include_router(
 
 app.include_router(
     chat_router,
+    prefix="/api",
+)
+
+app.include_router(
+    documents_router,
     prefix="/api",
 )
 

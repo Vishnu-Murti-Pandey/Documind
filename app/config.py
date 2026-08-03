@@ -224,3 +224,18 @@ CONVERSATION_HISTORY_LIMIT = int(
         "10",
     )
 )
+
+# ============================================================
+# Document Ingestion
+# ============================================================
+
+MAX_UPLOAD_SIZE_MB = int(
+    os.getenv(
+        "MAX_UPLOAD_SIZE_MB",
+        "50",
+    )
+)
+
+MAX_UPLOAD_SIZE_BYTES = (
+    MAX_UPLOAD_SIZE_MB * 1024 * 1024
+)

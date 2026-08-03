@@ -4,7 +4,13 @@ Insert vectors into Qdrant.
 
 import uuid
 
-from qdrant_client.models import PointStruct
+from qdrant_client.models import (
+    FieldCondition,
+    Filter,
+    FilterSelector,
+    MatchValue,
+    PointStruct
+)
 
 from app.models.vector_document import VectorDocument
 from app.vectorstore.client import VectorClient
@@ -66,4 +72,29 @@ class VectorStore:
             collection_name=COLLECTION_NAME,
             wait=True,
             points=[point],
+        )
+        
+    def delete_by_paper_name(
+        self,
+        paper_name: str,
+    ) -> None:
+        """
+        Delete every vector belonging to one paper.
+        """
+
+        self.client.delete(
+            collection_name=COLLECTION_NAME,
+            points_selector=FilterSelector(
+                filter=Filter(
+                    must=[
+                        FieldCondition(
+                            key="paper_name",
+                            match=MatchValue(
+                                value=paper_name
+                            ),
+                        )
+                    ]
+                )
+            ),
+            wait=True,
         )
