@@ -1,56 +1,86 @@
+"""
+Asynchronous multimodal RAG pipeline.
+
+The pipeline performs:
+- query embedding
+- hybrid retrieval
+- chunk reranking
+- figure selection
+- context building
+- prompt building
+- LLM generation
+
+It does not directly persist conversations.
+Persistence belongs to ChatService and ConversationMemoryService.
+"""
+
+import asyncio
+from collections.abc import AsyncGenerator
+from typing import Any
+
+from app.generation.asset_builder import AssetBuilder
 from app.generation.context_builder import ContextBuilder
 from app.generation.generator import Generator
 from app.generation.prompt_builder import PromptBuilder
-from app.retrieval.query_embedder import QueryEmbedder
-from app.retrieval.retriever import Retriever
-from app.reranking.reranker import Reranker
-from app.retrieval.citation_builder import CitationBuilder
 from app.models.rag_response import RAGResponse
 from app.models.search_filter import SearchFilter
-from app.generation.asset_builder import AssetBuilder
+from app.retrieval.citation_builder import CitationBuilder
 from app.retrieval.figure_builder import FigureBuilder
+from app.retrieval.query_embedder import QueryEmbedder
+from app.retrieval.retriever import Retriever
 from app.reranking.figure_reranker import FigureReranker
+from app.reranking.reranker import Reranker
 
 
 class RAGPipeline:
 
-    def __init__(self):
-
+    def __init__(self) -> None:
         self.embedder = QueryEmbedder()
-
         self.retriever = Retriever()
-
         self.reranker = Reranker()
 
         self.figure_builder = FigureBuilder()
-
         self.figure_reranker = FigureReranker()
 
         self.context_builder = ContextBuilder()
-
         self.asset_builder = AssetBuilder()
-
         self.citation_builder = CitationBuilder()
-
         self.prompt_builder = PromptBuilder()
 
         self.generator = Generator()
 
-    def ask(
+    async def _prepare(
         self,
         question: str,
         search_filter: SearchFilter | None = None,
-    ) -> RAGResponse:
+        conversation_history: list[dict[str, str]] | None = None,
+    ) -> tuple[str, list, list, list]:
+        """
+        Prepare the prompt and structured response metadata.
+        """
+
+        question = question.strip()
+
+        if not question:
+            raise ValueError(
+                "Question cannot be empty."
+            )
 
         # --------------------------------------------------
-        # Hybrid Retrieval
+        # Query embedding
         # --------------------------------------------------
 
-        query = self.embedder.embed(question)
+        query = await self.embedder.embed_async(
+            question
+        )
 
-        results = self.retriever.retrieve(
+        # --------------------------------------------------
+        # Hybrid retrieval
+        # --------------------------------------------------
+
+        results = await self.retriever.retrieve_async(
             query=query,
-            top_k=20,
+            top_k=10,
             search_filter=search_filter,
         )
 
@@ -58,37 +88,41 @@ class RAGPipeline:
         # Chunk reranking
         # --------------------------------------------------
 
-        results = self.reranker.rerank(
+        results = await self.reranker.rerank_async(
             question=question,
             results=results,
             top_k=5,
         )
 
         # --------------------------------------------------
-        # Figure retrieval + reranking
+        # Build lightweight metadata and context
         # --------------------------------------------------
 
-        figures = self.figure_builder.build(results)
+        raw_figures = self.figure_builder.build(
+            results
+        )
 
-        figures = self.figure_reranker.rerank(
-            question=question,
-            figures=figures,
-            top_k=2,
+        tables = self.asset_builder.build_tables(
+            results
+        )
+
+        context = self.context_builder.build(
+            results
+        )
+
+        citations = self.citation_builder.build(
+            results
         )
 
         # --------------------------------------------------
-        # Tables
+        # Figure reranking
         # --------------------------------------------------
 
-        tables = self.asset_builder.build_tables(results)
-
-        # --------------------------------------------------
-        # Context
-        # --------------------------------------------------
-
-        context = self.context_builder.build(results)
-
-        citations = self.citation_builder.build(results)
+        figures = await self.figure_reranker.rerank_async(
+            question=question,
+            figures=raw_figures,
+            top_k=2,
+        )
 
         # --------------------------------------------------
         # Prompt
@@ -98,13 +132,45 @@ class RAGPipeline:
             question=question,
             context=context,
             figures=figures,
+            conversation_history=conversation_history,
         )
 
-        # --------------------------------------------------
-        # LLM
-        # --------------------------------------------------
+        if not prompt:
+            raise ValueError(
+                "PromptBuilder returned an empty prompt."
+            )
 
-        answer = self.generator.generate(prompt)
+        return (
+            prompt,
+            citations,
+            figures,
+            tables,
+        )
+
+    async def ask(
+        self,
+        question: str,
+        search_filter: SearchFilter | None = None,
+        conversation_history: list[dict[str, str]] | None = None,
+    ) -> RAGResponse:
+        """
+        Generate a complete non-streaming response.
+        """
+
+        (
+            prompt,
+            citations,
+            figures,
+            tables,
+        ) = await self._prepare(
+            question=question,
+            search_filter=search_filter,
+            conversation_history=conversation_history,
+        )
+
+        answer = await self.generator.generate(
+            prompt
+        )
 
         return RAGResponse(
             answer=answer,
@@ -112,3 +178,184 @@ class RAGPipeline:
             figures=figures,
             tables=tables,
         )
+
+    async def stream_events(
+        self,
+        question: str,
+        search_filter: SearchFilter | None = None,
+        conversation_history: list[dict[str, str]] | None = None,
+    ) -> AsyncGenerator[dict[str, Any], None]:
+        """
+        Yield internal structured streaming events.
+
+        These are converted to SSE by ChatService.
+        """
+
+        question = question.strip()
+
+        if not question:
+            raise ValueError(
+                "Question cannot be empty."
+            )
+
+        # --------------------------------------------------
+        # Embedding
+        # --------------------------------------------------
+
+        yield {
+            "type": "status",
+            "data": {
+                "stage": "embedding",
+                "message": "Understanding your question...",
+            },
+        }
+
+        query = await self.embedder.embed_async(
+            question
+        )
+
+        # --------------------------------------------------
+        # Retrieval
+        # --------------------------------------------------
+
+        yield {
+            "type": "status",
+            "data": {
+                "stage": "retrieval",
+                "message": (
+                    "Searching relevant paper sections..."
+                ),
+            },
+        }
+
+        results = await self.retriever.retrieve_async(
+            query=query,
+            top_k=10,
+            search_filter=search_filter,
+        )
+
+        # --------------------------------------------------
+        # Reranking
+        # --------------------------------------------------
+
+        yield {
+            "type": "status",
+            "data": {
+                "stage": "reranking",
+                "message": (
+                    "Ranking the most relevant sections..."
+                ),
+            },
+        }
+
+        results = await self.reranker.rerank_async(
+            question=question,
+            results=results,
+            top_k=5,
+        )
+
+        # --------------------------------------------------
+        # Context and assets
+        # --------------------------------------------------
+
+        yield {
+            "type": "status",
+            "data": {
+                "stage": "context",
+                "message": (
+                    "Preparing context and supporting assets..."
+                ),
+            },
+        }
+
+        raw_figures = self.figure_builder.build(
+            results
+        )
+
+        figure_task = asyncio.create_task(
+            self.figure_reranker.rerank_async(
+                question=question,
+                figures=raw_figures,
+                top_k=2,
+            )
+        )
+
+        tables = self.asset_builder.build_tables(
+            results
+        )
+
+        context = self.context_builder.build(
+            results
+        )
+
+        citations = self.citation_builder.build(
+            results
+        )
+
+        figures = await figure_task
+
+        # --------------------------------------------------
+        # Prompt
+        # --------------------------------------------------
+
+        prompt = self.prompt_builder.build(
+            question=question,
+            context=context,
+            figures=figures,
+            conversation_history=conversation_history,
+        )
+
+        if not prompt:
+            raise ValueError(
+                "PromptBuilder returned an empty prompt."
+            )
+
+        # --------------------------------------------------
+        # Generation
+        # --------------------------------------------------
+
+        yield {
+            "type": "status",
+            "data": {
+                "stage": "generation",
+                "message": "Generating the answer...",
+            },
+        }
+
+        async for token in self.generator.stream(
+            prompt
+        ):
+            yield {
+                "type": "token",
+                "data": {
+                    "content": token,
+                },
+            }
+
+        # --------------------------------------------------
+        # Metadata
+        # --------------------------------------------------
+
+        yield {
+            "type": "metadata",
+            "data": {
+                "citations": [
+                    citation.model_dump(
+                        mode="json"
+                    )
+                    for citation in citations
+                ],
+                "figures": [
+                    figure.model_dump(
+                        mode="json"
+                    )
+                    for figure in figures
+                ],
+                "tables": [
+                    table.model_dump(
+                        mode="json"
+                    )
+                    for table in tables
+                ],
+            },
+        }

@@ -1,18 +1,9 @@
-from typing import Any
-
 from pydantic import BaseModel
 
 
 class FigureReference(BaseModel):
     """
-    Figure returned by the RAG pipeline.
-
-    This model is used throughout:
-    - FigureBuilder
-    - FigureReranker
-    - PromptBuilder
-    - RAGResponse
-    - Frontend/API
+    Renderable figure returned to the frontend.
     """
 
     score: float = 0.0
@@ -31,4 +22,5 @@ class FigureReference(BaseModel):
 
     description: str | None = None
 
-    storage: dict[str, Any]
+    # Stable FastAPI URL, not an expiring MinIO URL.
+    image_url: str

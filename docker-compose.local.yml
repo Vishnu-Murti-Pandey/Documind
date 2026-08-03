@@ -1,0 +1,143 @@
+services:
+
+  # =================================================
+  # PostgreSQL
+  #
+  # Persistent storage for:
+  # - conversations
+  # - chat messages
+  # - conversation summaries
+  # - user/document relationships
+  # =================================================
+
+  postgres:
+    image: postgres:17-alpine
+    container_name: rag-postgres-local
+
+    ports:
+      # Exposed locally so you can connect using:
+      # DBeaver, pgAdmin, psql, or your host FastAPI app.
+      - "${POSTGRES_PORT:-5432}:5432"
+
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+
+      # PostgreSQL stores data in this directory.
+      PGDATA: /var/lib/postgresql/data/pgdata
+
+    volumes:
+      - postgres_data_local:/var/lib/postgresql/data
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+    restart: unless-stopped
+
+    networks:
+      - rag-network-local
+
+
+  # =================================================
+  # MinIO Object Storage
+  # =================================================
+
+  minio:
+    build:
+      context: ./docker/minio
+
+    container_name: rag-minio-local
+
+    ports:
+      - "${MINIO_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+
+    volumes:
+      - minio_data_local:/data
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "curl",
+          "-f",
+          "http://localhost:9000/minio/health/live"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+    restart: unless-stopped
+
+    networks:
+      - rag-network-local
+
+
+  # =================================================
+  # Qdrant Vector Database
+  # =================================================
+
+  qdrant:
+    build:
+      context: ./docker/qdrant
+
+    container_name: rag-qdrant-local
+
+    ports:
+      - "${QDRANT_PORT:-6333}:6333"
+      - "${QDRANT_GRPC_PORT:-6334}:6334"
+
+    volumes:
+      - qdrant_data_local:/qdrant/storage
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "curl",
+          "-f",
+          "http://localhost:6333/health"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+    restart: unless-stopped
+
+    networks:
+      - rag-network-local
+
+
+# =================================================
+# Persistent Volumes
+# =================================================
+
+volumes:
+  postgres_data_local:
+  minio_data_local:
+  qdrant_data_local:
+
+
+# =================================================
+# Internal Network
+# =================================================
+
+networks:
+  rag-network-local:
+    name: rag-network-local
+    driver: bridge
