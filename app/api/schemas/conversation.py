@@ -90,16 +90,10 @@ class ChatMessageItem(BaseModel):
 
 
 class ConversationMessagesResponse(BaseModel):
-    """
-    Paginated messages belonging to one conversation.
-    """
-
     conversation_id: str
     title: str | None
 
     messages: list[ChatMessageItem]
 
-    page: int
-    limit: int
-    total: int
+    next_cursor: str | None
     has_more: bool

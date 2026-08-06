@@ -7,11 +7,14 @@ Contains all database operations related to chat messages.
 from uuid import UUID
 
 from sqlalchemy import (
+    and_,
     delete,
     func,
+    or_,
     select,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.utils.message_cursor import MessageCursor
 
 from app.db.models.chat_message import (
     ChatMessage,
@@ -278,3 +281,73 @@ class ChatMessageRepository:
         await self.session.flush()
 
         return result.rowcount or 0
+    
+    
+    async def list_cursor_page(
+        self,
+        conversation_id: UUID,
+        limit: int = 20,
+        cursor: MessageCursor | None = None,
+    ) -> tuple[list[ChatMessage], bool]:
+        """
+        Load the latest message page or messages older than a cursor.
+
+        Database query order:
+            newest -> oldest
+
+        Returned API order:
+            oldest -> newest
+
+        One extra row is fetched to determine whether older messages
+        still exist.
+        """
+
+        statement = select(
+            ChatMessage
+        ).where(
+            ChatMessage.conversation_id
+            == conversation_id
+        )
+
+        if cursor is not None:
+            statement = statement.where(
+                or_(
+                    ChatMessage.created_at
+                    < cursor.created_at,
+
+                    and_(
+                        ChatMessage.created_at
+                        == cursor.created_at,
+
+                        ChatMessage.id
+                        < cursor.message_id,
+                    ),
+                )
+            )
+
+        statement = (
+            statement
+            .order_by(
+                ChatMessage.created_at.desc(),
+                ChatMessage.id.desc(),
+            )
+            .limit(limit + 1)
+        )
+
+        result = await self.session.execute(
+            statement
+        )
+
+        messages = list(
+            result.scalars().all()
+        )
+
+        has_more = len(messages) > limit
+
+        if has_more:
+            messages = messages[:limit]
+
+        # Frontend renders messages chronologically.
+        messages.reverse()
+
+        return messages, has_more

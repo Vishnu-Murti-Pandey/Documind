@@ -19,11 +19,20 @@ from app.repositories.chat_message_repository import (
 from app.repositories.conversation_repository import (
     ConversationRepository,
 )
+from app.utils.message_cursor import (
+    decode_message_cursor,
+    encode_message_cursor,
+)
 
 
 class ConversationNotFoundError(Exception):
     """
     Raised when a requested conversation does not exist.
+    """
+    
+class InvalidMessageCursorError(Exception):
+    """
+    Raised when a message-pagination cursor is malformed.
     """
 
 
@@ -104,8 +113,8 @@ class ConversationService:
     async def get_messages(
         self,
         public_id: str,
-        page: int,
         limit: int,
+        cursor: str | None = None,
     ) -> ConversationMessagesResponse:
 
         conversation = (
@@ -120,13 +129,36 @@ class ConversationService:
                 public_id
             )
 
-        messages, total = (
-            await self.message_repository.list_paginated(
+        decoded_cursor = None
+
+        if cursor:
+            try:
+                decoded_cursor = (
+                    decode_message_cursor(
+                        cursor
+                    )
+                )
+
+            except ValueError as exc:
+                raise InvalidMessageCursorError() from exc
+
+        messages, has_more = (
+            await self.message_repository.list_cursor_page(
                 conversation_id=conversation.id,
-                page=page,
                 limit=limit,
+                cursor=decoded_cursor,
             )
         )
+
+        next_cursor = None
+
+        if has_more and messages:
+            oldest_message = messages[0]
+
+            next_cursor = encode_message_cursor(
+                created_at=oldest_message.created_at,
+                message_id=oldest_message.id,
+            )
 
         message_items = [
             ChatMessageItem(
@@ -145,10 +177,8 @@ class ConversationService:
             conversation_id=conversation.public_id,
             title=conversation.title,
             messages=message_items,
-            page=page,
-            limit=limit,
-            total=total,
-            has_more=((page + 1) * limit < total),
+            next_cursor=next_cursor,
+            has_more=has_more,
         )
 
     async def rename_conversation(
