@@ -24,6 +24,7 @@ FastAPI's event loop.
 
 import asyncio
 import logging
+import threading
 import time
 from collections.abc import AsyncGenerator
 from pathlib import Path
@@ -47,7 +48,11 @@ class IngestionPipeline:
     Ingest one PDF while emitting structured progress events.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        cancel_event: threading.Event | None = None,
+    ) -> None:
+        self.cancel_event = cancel_event or threading.Event()
         self.chunker = DocumentChunker()
 
         self.image_enricher = ImageEnricher()
@@ -58,6 +63,27 @@ class IngestionPipeline:
 
         self.collection_manager = CollectionManager()
         self.vector_store = VectorStore()
+
+    def _raise_if_cancelled(self) -> None:
+        if self.cancel_event.is_set():
+            raise IngestionCancelledError(
+                "Document ingestion was cancelled."
+            )
+
+    async def _run_sync(self, function: Any, *args: Any) -> Any:
+        """Run one blocking stage without allowing cancellation cleanup to race it."""
+        self._raise_if_cancelled()
+        task = asyncio.create_task(asyncio.to_thread(function, *args))
+        try:
+            result = await asyncio.shield(task)
+        except asyncio.CancelledError:
+            self.cancel_event.set()
+            # Python cannot terminate a running worker thread. Wait for the
+            # current atomic stage, then let the caller clean up its output.
+            await task
+            raise
+        self._raise_if_cancelled()
+        return result
 
     async def stream(
         self,
@@ -135,7 +161,7 @@ class IngestionPipeline:
                 pdf_path
             )
 
-            elements = await asyncio.to_thread(
+            elements = await self._run_sync(
                 parser.parse_to_json
             )
 
@@ -164,7 +190,7 @@ class IngestionPipeline:
                 },
             }
 
-            chunks = await asyncio.to_thread(
+            chunks = await self._run_sync(
                 self.chunker.create_chunks,
                 elements,
                 resolved_paper_name,
@@ -206,7 +232,7 @@ class IngestionPipeline:
                 },
             }
 
-            await asyncio.to_thread(
+            await self._run_sync(
                 self.collection_manager.create
             )
 
@@ -225,6 +251,7 @@ class IngestionPipeline:
                 chunks,
                 start=1,
             ):
+                self._raise_if_cancelled()
                 chunk_id = chunk.get(
                     "chunk_id",
                     f"chunk-{index}",
@@ -276,7 +303,7 @@ class IngestionPipeline:
                     },
                 }
 
-                chunk = await asyncio.to_thread(
+                chunk = await self._run_sync(
                     self.image_enricher.enrich_chunk,
                     chunk,
                 )
@@ -304,7 +331,7 @@ class IngestionPipeline:
                     },
                 }
 
-                chunk = await asyncio.to_thread(
+                chunk = await self._run_sync(
                     self.table_enricher.enrich_chunk,
                     chunk,
                 )
@@ -332,12 +359,12 @@ class IngestionPipeline:
                     },
                 }
 
-                embedding_document = await asyncio.to_thread(
+                embedding_document = await self._run_sync(
                     self.embedding_builder.build_document,
                     chunk,
                 )
 
-                vector_document = await asyncio.to_thread(
+                vector_document = await self._run_sync(
                     self.embedding_generator.generate,
                     embedding_document,
                 )
@@ -365,7 +392,7 @@ class IngestionPipeline:
                     },
                 }
 
-                await asyncio.to_thread(
+                await self._run_sync(
                     self.vector_store.insert,
                     vector_document,
                 )
@@ -420,7 +447,7 @@ class IngestionPipeline:
                 },
             }
 
-        except asyncio.CancelledError:
+        except (asyncio.CancelledError, IngestionCancelledError):
             logger.info(
                 "Ingestion stream was cancelled for paper %s.",
                 resolved_paper_name,
@@ -446,3 +473,7 @@ class IngestionPipeline:
                     "detail": str(exc),
                 },
             }
+
+
+class IngestionCancelledError(Exception):
+    """Raised after an ingestion cancellation signal is observed."""

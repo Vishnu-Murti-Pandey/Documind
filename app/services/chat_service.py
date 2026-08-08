@@ -3,6 +3,7 @@ Chat application service.
 
 Coordinates:
 - backend-generated conversation IDs
+- document-aware conversations
 - conversation memory
 - RAG generation
 - assistant response persistence
@@ -32,9 +33,9 @@ logger = logging.getLogger(__name__)
 
 def generate_conversation_id() -> str:
     """
-    Generate a frontend-safe public conversation identifier.
+    Generate the public conversation ID returned to the frontend.
 
-    The internal PostgreSQL primary key remains separate.
+    The PostgreSQL primary key remains separate.
     """
 
     return str(uuid.uuid4())
@@ -55,6 +56,28 @@ class ChatService:
         )
 
     # ============================================================
+    # Helpers
+    # ============================================================
+
+    @staticmethod
+    def get_requested_paper_name(
+        request: ChatRequest,
+    ) -> str | None:
+        """
+        Extract and normalize paper_name from the request filter.
+        """
+
+        if (
+            request.filter is None
+            or not request.filter.paper_name
+        ):
+            return None
+
+        paper_name = request.filter.paper_name.strip()
+
+        return paper_name or None
+
+    # ============================================================
     # Non-streaming chat
     # ============================================================
 
@@ -65,12 +88,15 @@ class ChatService:
         """
         Complete non-streaming chat flow.
 
-        For a new chat:
-        - request.conversation_id is None
-        - backend generates the conversation ID
+        New conversation:
+        - frontend does not send conversation_id
+        - backend generates conversation_id
+        - selected paper is persisted on the conversation
 
-        For an existing chat:
-        - frontend sends the previously returned conversation ID
+        Existing conversation:
+        - frontend reuses the returned conversation_id
+        - ConversationMemoryService verifies that the requested
+          paper matches the paper stored on the conversation
         """
 
         conversation_id = (
@@ -78,36 +104,51 @@ class ChatService:
             or generate_conversation_id()
         )
 
-        # --------------------------------------------------
-        # Load or create the conversation
-        # --------------------------------------------------
-
-        memory_context = await self.memory.prepare(
-            public_id=conversation_id,
-        )
-
-        # --------------------------------------------------
-        # Set the title for a new conversation
-        # --------------------------------------------------
-
-        if memory_context.is_new_conversation:
-            await self.memory.set_initial_title(
-                conversation=memory_context.conversation,
-                user_message=request.message,
+        requested_paper_name = (
+            self.get_requested_paper_name(
+                request
             )
-
-        # --------------------------------------------------
-        # Save the current user message
-        # --------------------------------------------------
-
-        await self.memory.save_user_message(
-            conversation=memory_context.conversation,
-            content=request.message,
         )
 
         try:
             # --------------------------------------------------
-            # Generate the answer using previous history
+            # Load or create the document-aware conversation
+            # --------------------------------------------------
+
+            memory_context = await self.memory.prepare(
+                public_id=conversation_id,
+                paper_name=requested_paper_name,
+            )
+
+            persisted_paper_name = (
+                memory_context.conversation.paper_name
+            )
+
+            # --------------------------------------------------
+            # Set the initial title
+            # --------------------------------------------------
+
+            if memory_context.is_new_conversation:
+                await self.memory.set_initial_title(
+                    conversation=(
+                        memory_context.conversation
+                    ),
+                    user_message=request.message,
+                )
+
+            # --------------------------------------------------
+            # Save user message
+            # --------------------------------------------------
+
+            await self.memory.save_user_message(
+                conversation=(
+                    memory_context.conversation
+                ),
+                content=request.message,
+            )
+
+            # --------------------------------------------------
+            # Generate response
             # --------------------------------------------------
 
             result = await self.pipeline.ask(
@@ -119,11 +160,13 @@ class ChatService:
             )
 
             # --------------------------------------------------
-            # Save the assistant response
+            # Save assistant response
             # --------------------------------------------------
 
             await self.memory.save_assistant_message(
-                conversation=memory_context.conversation,
+                conversation=(
+                    memory_context.conversation
+                ),
                 content=result.answer,
                 citations=result.citations,
                 figures=result.figures,
@@ -132,20 +175,31 @@ class ChatService:
 
             return ChatResponse(
                 conversation_id=conversation_id,
+                paper_name=persisted_paper_name,
                 answer=result.answer,
                 citations=result.citations,
                 figures=result.figures,
                 tables=result.tables,
             )
 
+        except ValueError:
+            logger.exception(
+                "Conversation source validation failed.",
+                extra={
+                    "conversation_id": conversation_id,
+                    "paper_name": requested_paper_name,
+                },
+            )
+            raise
+
         except Exception:
             logger.exception(
                 "Non-streaming chat request failed.",
                 extra={
                     "conversation_id": conversation_id,
+                    "paper_name": requested_paper_name,
                 },
             )
-
             raise
 
     # ============================================================
@@ -157,17 +211,22 @@ class ChatService:
         request: ChatRequest,
     ) -> AsyncGenerator[str, None]:
         """
-        Streaming chat flow.
+        Stream the RAG response using SSE.
 
-        The conversation ID is generated once and sent to the
-        frontend before token streaming begins.
-
-        The full answer is accumulated and saved after generation.
+        The conversation event is emitted after the conversation
+        has been loaded or created so the returned paper_name is
+        the value persisted in PostgreSQL.
         """
 
         conversation_id = (
             request.conversation_id
             or generate_conversation_id()
+        )
+
+        requested_paper_name = (
+            self.get_requested_paper_name(
+                request
+            )
         )
 
         complete_answer = ""
@@ -178,9 +237,24 @@ class ChatService:
             "tables": [],
         }
 
+        memory_context = None
+
         try:
             # --------------------------------------------------
-            # Send the conversation ID immediately
+            # Load or create conversation
+            # --------------------------------------------------
+
+            memory_context = await self.memory.prepare(
+                public_id=conversation_id,
+                paper_name=requested_paper_name,
+            )
+
+            persisted_paper_name = (
+                memory_context.conversation.paper_name
+            )
+
+            # --------------------------------------------------
+            # Return the backend-generated conversation identity
             # --------------------------------------------------
 
             yield sse_event(
@@ -188,21 +262,14 @@ class ChatService:
                 {
                     "conversation_id": conversation_id,
                     "is_new": (
-                        request.conversation_id is None
+                        memory_context.is_new_conversation
                     ),
+                    "paper_name": persisted_paper_name,
                 },
             )
 
             # --------------------------------------------------
-            # Load or create the conversation
-            # --------------------------------------------------
-
-            memory_context = await self.memory.prepare(
-                public_id=conversation_id,
-            )
-
-            # --------------------------------------------------
-            # Create initial conversation title
+            # Set title for first message
             # --------------------------------------------------
 
             if memory_context.is_new_conversation:
@@ -218,7 +285,9 @@ class ChatService:
             # --------------------------------------------------
 
             await self.memory.save_user_message(
-                conversation=memory_context.conversation,
+                conversation=(
+                    memory_context.conversation
+                ),
                 content=request.message,
             )
 
@@ -263,7 +332,7 @@ class ChatService:
                 )
 
             # --------------------------------------------------
-            # Validate generated answer
+            # Validate output
             # --------------------------------------------------
 
             if not complete_answer.strip():
@@ -272,7 +341,7 @@ class ChatService:
                 )
 
             # --------------------------------------------------
-            # Persist assistant response
+            # Save complete assistant answer
             # --------------------------------------------------
 
             yield sse_event(
@@ -286,7 +355,9 @@ class ChatService:
             )
 
             await self.memory.save_assistant_message(
-                conversation=memory_context.conversation,
+                conversation=(
+                    memory_context.conversation
+                ),
                 content=complete_answer,
                 citations=metadata.get(
                     "citations",
@@ -311,6 +382,7 @@ class ChatService:
                 {
                     "status": "completed",
                     "conversation_id": conversation_id,
+                    "paper_name": persisted_paper_name,
                 },
             )
 
@@ -319,16 +391,44 @@ class ChatService:
                 "Streaming client disconnected.",
                 extra={
                     "conversation_id": conversation_id,
+                    "paper_name": requested_paper_name,
+                },
+            )
+            raise
+
+        except ValueError as exc:
+            logger.warning(
+                "Conversation source validation failed.",
+                extra={
+                    "conversation_id": conversation_id,
+                    "paper_name": requested_paper_name,
                 },
             )
 
-            raise
+            yield sse_event(
+                "error",
+                {
+                    "message": str(exc),
+                    "conversation_id": conversation_id,
+                    "paper_name": requested_paper_name,
+                },
+            )
+
+            yield sse_event(
+                "done",
+                {
+                    "status": "failed",
+                    "conversation_id": conversation_id,
+                    "paper_name": requested_paper_name,
+                },
+            )
 
         except Exception:
             logger.exception(
                 "Streaming chat request failed.",
                 extra={
                     "conversation_id": conversation_id,
+                    "paper_name": requested_paper_name,
                 },
             )
 
@@ -339,6 +439,7 @@ class ChatService:
                         "The request could not be completed."
                     ),
                     "conversation_id": conversation_id,
+                    "paper_name": requested_paper_name,
                 },
             )
 
@@ -347,5 +448,6 @@ class ChatService:
                 {
                     "status": "failed",
                     "conversation_id": conversation_id,
+                    "paper_name": requested_paper_name,
                 },
             )

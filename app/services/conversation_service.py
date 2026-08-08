@@ -70,6 +70,7 @@ class ConversationService:
             ConversationItem(
                 conversation_id=conversation.public_id,
                 title=conversation.title,
+                paper_name=conversation.paper_name,
                 created_at=conversation.created_at,
                 updated_at=conversation.updated_at,
             )
@@ -105,6 +106,7 @@ class ConversationService:
             conversation_id=conversation.public_id,
             title=conversation.title,
             summary=conversation.summary,
+            paper_name=conversation.paper_name,
             is_active=conversation.is_active,
             created_at=conversation.created_at,
             updated_at=conversation.updated_at,
@@ -176,6 +178,7 @@ class ConversationService:
         return ConversationMessagesResponse(
             conversation_id=conversation.public_id,
             title=conversation.title,
+            paper_name=conversation.paper_name,
             messages=message_items,
             next_cursor=next_cursor,
             has_more=has_more,
@@ -217,6 +220,7 @@ class ConversationService:
                 conversation_id=conversation.public_id,
                 title=conversation.title,
                 summary=conversation.summary,
+                paper_name=conversation.paper_name,
                 is_active=conversation.is_active,
                 created_at=conversation.created_at,
                 updated_at=conversation.updated_at,

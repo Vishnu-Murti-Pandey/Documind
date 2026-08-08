@@ -3,10 +3,12 @@ Document repository.
 """
 
 from uuid import UUID
+from datetime import timedelta
 
 from sqlalchemy import (
     func,
     select,
+    update,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -107,6 +109,26 @@ class DocumentRepository:
             list(result.scalars().all()),
             total,
         )
+
+    async def fail_stale_processing(self, hours: int = 24) -> int:
+        """Recover jobs left processing after a worker restart or disconnect."""
+        statement = (
+            update(Document)
+            .where(
+                Document.status == DocumentStatus.PROCESSING,
+                Document.updated_at < func.now() - timedelta(hours=hours),
+            )
+            .values(
+                status=DocumentStatus.FAILED,
+                error_message=(
+                    "Ingestion did not finish and was marked stale. "
+                    "Retry or delete this document."
+                ),
+                updated_at=func.now(),
+            )
+        )
+        result = await self.session.execute(statement)
+        return int(result.rowcount or 0)
 
     async def mark_processing(
         self,

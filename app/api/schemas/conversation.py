@@ -16,6 +16,7 @@ class ConversationItem(BaseModel):
 
     conversation_id: str
     title: str | None
+    paper_name: str | None
 
     created_at: datetime
     updated_at: datetime
@@ -92,6 +93,7 @@ class ChatMessageItem(BaseModel):
 class ConversationMessagesResponse(BaseModel):
     conversation_id: str
     title: str | None
+    paper_name: str | None
 
     messages: list[ChatMessageItem]
 

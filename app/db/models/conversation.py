@@ -4,7 +4,6 @@ Conversation database model.
 
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     Boolean,
@@ -24,15 +23,7 @@ from sqlalchemy.orm import (
 from app.db.base import Base
 
 
-if TYPE_CHECKING:
-    from app.db.models.chat_message import ChatMessage
-
-
 class Conversation(Base):
-    """
-    Represents one chat conversation.
-    """
-
     __tablename__ = "conversations"
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -41,7 +32,6 @@ class Conversation(Base):
         default=uuid.uuid4,
     )
 
-    # Public conversation identifier used by the frontend.
     public_id: Mapped[str] = mapped_column(
         String(100),
         nullable=False,
@@ -54,10 +44,16 @@ class Conversation(Base):
         nullable=True,
     )
 
-    # Used later when conversation summarization is added.
     summary: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,
+    )
+
+    # The document used as the retrieval source.
+    paper_name: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+        index=True,
     )
 
     is_active: Mapped[bool] = mapped_column(
@@ -65,6 +61,7 @@ class Conversation(Base):
         nullable=False,
         default=True,
         server_default="true",
+        index=True,
     )
 
     created_at: Mapped[datetime] = mapped_column(
@@ -80,7 +77,8 @@ class Conversation(Base):
         onupdate=func.now(),
     )
 
-    messages: Mapped[list["ChatMessage"]] = relationship(
+    messages = relationship(
+        "ChatMessage",
         back_populates="conversation",
         cascade="all, delete-orphan",
         passive_deletes=True,

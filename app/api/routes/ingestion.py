@@ -13,8 +13,10 @@ import asyncio
 import logging
 import re
 import tempfile
+import threading
 from collections.abc import AsyncGenerator
 from pathlib import Path
+from uuid import UUID
 
 from fastapi import (
     APIRouter,
@@ -34,7 +36,8 @@ from app.config import (
     MAX_UPLOAD_SIZE_MB,
 )
 from app.db.session import get_db_session
-from app.ingest import IngestionPipeline
+from app.ingest import IngestionPipeline, IngestionCancelledError
+from app.repositories.document_repository import DocumentRepository
 from app.services.document_service import (
     DocumentService,
     DuplicateDocumentError,
@@ -48,6 +51,35 @@ router = APIRouter(
     prefix="/ingestion",
     tags=["Ingestion"],
 )
+
+# Active jobs live in this process. The thread-safe event can be observed by
+# the async pipeline between blocking parsing/enrichment/embedding stages.
+_active_ingestions: dict[UUID, threading.Event] = {}
+
+
+@router.post("/{document_id}/cancel", status_code=status.HTTP_202_ACCEPTED)
+async def cancel_ingestion(
+    document_id: UUID,
+    session: AsyncSession = Depends(get_db_session),
+) -> dict[str, str]:
+    cancel_event = _active_ingestions.get(document_id)
+    if cancel_event is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No active ingestion was found for this document.",
+        )
+    cancel_event.set()
+
+    repository = DocumentRepository(session)
+    document = await repository.get_by_id(document_id)
+    if document is not None:
+        await repository.mark_failed(
+            document,
+            "Document ingestion was cancelled.",
+        )
+        await session.commit()
+
+    return {"status": "cancelling"}
 
 
 def sanitize_paper_name(
@@ -231,7 +263,9 @@ async def stream_ingestion(
             ),
         ) from exc
 
-    pipeline = IngestionPipeline()
+    cancel_event = threading.Event()
+    pipeline = IngestionPipeline(cancel_event=cancel_event)
+    _active_ingestions[document.id] = cancel_event
 
     async def event_generator(
     ) -> AsyncGenerator[str, None]:
@@ -308,18 +342,21 @@ async def stream_ingestion(
                     event_data,
                 )
 
-        except asyncio.CancelledError:
+        except (asyncio.CancelledError, IngestionCancelledError) as exc:
             logger.warning(
-                "Ingestion client disconnected for %s.",
+                "Ingestion cancelled for %s.",
                 paper_name,
             )
 
             if not completed:
                 try:
+                    await document_service.cleanup_document_data(
+                        paper_name
+                    )
                     await document_service.mark_failed(
                         document=document,
                         error_message=(
-                            "Ingestion connection was cancelled."
+                            "Document ingestion was cancelled."
                         ),
                     )
                 except Exception:
@@ -327,7 +364,10 @@ async def stream_ingestion(
                         "Failed to mark ingestion as failed."
                     )
 
-            raise
+            if isinstance(exc, asyncio.CancelledError):
+                raise
+
+            return
 
         except Exception as exc:
             logger.exception(
@@ -366,6 +406,7 @@ async def stream_ingestion(
             )
 
         finally:
+            _active_ingestions.pop(document.id, None)
             temporary_path.unlink(
                 missing_ok=True
             )

@@ -75,6 +75,7 @@ class ConversationMemoryService:
     async def prepare(
         self,
         public_id: str,
+        paper_name: str | None = None,
     ) -> ConversationMemoryContext:
         """
         Get or create a conversation and load its recent history.
@@ -83,39 +84,60 @@ class ConversationMemoryService:
         Therefore, the returned history contains only previous turns.
         """
 
-        public_id = public_id.strip()
+        conversation, is_new = (
+            await self.conversation_repository.get_or_create(
+                public_id=public_id,
+                paper_name=paper_name,
+            )
+        )
 
-        if not public_id:
+        if (
+            not is_new
+            and paper_name
+            and conversation.paper_name
+            and conversation.paper_name != paper_name
+        ):
             raise ValueError(
-                "conversation_id cannot be empty."
+                "This conversation is associated with a different document."
             )
 
-        try:
-            conversation, created = (
-                await self.conversation_repository.get_or_create(
-                    public_id=public_id,
-                )
+        if (
+            not is_new
+            and paper_name
+            and not conversation.paper_name
+        ):
+            await self.conversation_repository.update_paper_name(
+                conversation=conversation,
+                paper_name=paper_name,
             )
 
-            history = await self.message_repository.list_recent(
+        await self.session.commit()
+
+        await self.session.refresh(
+            conversation
+        )
+
+        messages = (
+            await self.message_repository.list_recent(
                 conversation_id=conversation.id,
                 limit=self.history_limit,
             )
+        )
 
-            llm_history = self.to_llm_history(
-                history
-            )
+        llm_history = [
+            {
+                "role": message.role.value,
+                "content": message.content,
+            }
+            for message in messages
+        ]
 
-            return ConversationMemoryContext(
-                conversation=conversation,
-                history=history,
-                llm_history=llm_history,
-                is_new_conversation=created,
-            )
-
-        except Exception:
-            await self.session.rollback()
-            raise
+        return ConversationMemoryContext(
+            conversation=conversation,
+            is_new_conversation=is_new,
+            messages=messages,
+            llm_history=llm_history,
+        )
 
     # ============================================================
     # User messages

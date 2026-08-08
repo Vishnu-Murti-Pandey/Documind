@@ -69,6 +69,10 @@ class DocumentService:
         limit: int,
     ) -> DocumentListResponse:
 
+        stale_count = await self.repository.fail_stale_processing()
+        if stale_count:
+            await self.session.commit()
+
         documents, total = (
             await self.repository.list_paginated(
                 page=page,

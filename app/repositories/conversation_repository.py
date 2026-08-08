@@ -33,14 +33,18 @@ class ConversationRepository:
         self,
         public_id: str,
         title: str | None = None,
+        paper_name: str | None = None,
     ) -> Conversation:
 
         conversation = Conversation(
             public_id=public_id,
             title=title,
+            paper_name=paper_name,
         )
 
-        self.session.add(conversation)
+        self.session.add(
+            conversation
+        )
 
         await self.session.flush()
 
@@ -83,6 +87,7 @@ class ConversationRepository:
         self,
         public_id: str,
         title: str | None = None,
+        paper_name: str | None = None,
     ) -> tuple[Conversation, bool]:
 
         conversation = await self.get_by_public_id(
@@ -95,6 +100,7 @@ class ConversationRepository:
         conversation = await self.create(
             public_id=public_id,
             title=title,
+            paper_name=paper_name,
         )
 
         return conversation, True
@@ -172,6 +178,27 @@ class ConversationRepository:
             )
 
         conversation.title = title
+
+        await self.touch(
+            conversation
+        )
+
+        await self.session.flush()
+
+        return conversation
+    
+    
+    async def update_paper_name(
+        self,
+        conversation: Conversation,
+        paper_name: str | None,
+    ) -> Conversation:
+
+        conversation.paper_name = (
+            paper_name.strip()
+            if paper_name
+            else None
+        )
 
         await self.touch(
             conversation
