@@ -15,9 +15,9 @@ export function ChatMessage({ message, onRetry }: ChatMessageProps) {
 
   return (
     <Message from={message.role} data-message-id={message.id}>
-      <MessageContent className={cn(isUser && "rounded-2xl bg-muted px-4 py-3")}>
+      <MessageContent className={cn(isUser && "shadow-[0_1px_2px_rgb(40_30_20/0.04)]")}>
         {isUser ? (
-          <p className="whitespace-pre-wrap text-sm leading-6">{message.content}</p>
+          <p className="whitespace-pre-wrap leading-6">{message.content}</p>
         ) : (
           <AssistantMessage message={message} onRetry={onRetry} />
         )}

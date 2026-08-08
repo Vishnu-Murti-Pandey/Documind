@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { StopCircle } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { ChatHeader } from "@/components/chat/chat-header";
@@ -9,11 +8,12 @@ import { ChatHistory } from "@/components/chat/chat-history";
 import { DocumentSelector } from "@/components/documents/document-selector";
 import {
   PromptInput,
+  PromptInputFooter,
   PromptInputSubmit,
   PromptInputTextarea,
+  PromptInputTools,
   type PromptInputMessage,
 } from "@/components/ai-elements/prompt-input";
-import { Button } from "@/components/ui/button";
 
 import { addOptimisticConversation } from "@/features/conversations/cache";
 import {
@@ -21,6 +21,7 @@ import {
   useConversation,
 } from "@/features/conversations/queries";
 import { chatMessageKeys } from "@/features/chat/queries";
+import { cacheOptimisticUserMessage } from "@/features/chat/cache";
 import { streamChat } from "@/features/chat/stream";
 import type {
   ChatMessage as ChatMessageType,
@@ -86,36 +87,29 @@ export function ChatClient({ initialConversationId }: ChatClientProps) {
 
   const selectPaper = useDocumentSelectionStore((state) => state.selectPaper);
 
-  const conversationQuery = useConversation(conversationId);
+  // Route props change before the local state reset effect runs. Prefer the
+  // route ID so a conversation switch can never briefly use the previous
+  // conversation's source document.
+  const activeConversationId = initialConversationId ?? conversationId;
+  const conversationQuery = useConversation(activeConversationId);
   const documentsQuery = useDocuments(0, 50);
   const persistedPaperName = conversationQuery.data?.paper_name;
-  const sourceAvailable =
-    !conversationId ||
-    !persistedPaperName ||
-    documentsQuery.isLoading ||
-    documentsQuery.isError ||
-    Boolean(
-      documentsQuery.data?.items.some(
-        (document) =>
-          document.paper_name === persistedPaperName &&
-          document.status === "completed",
-      ),
-    );
-
-  /**
-   * When an existing conversation is opened, restore the source
-   * document persisted on the conversation.
-   *
-   * This runs in an effect instead of mutating Zustand during
-   * render.
-   */
-  useEffect(() => {
-    const persistedPaperName = conversationQuery.data?.paper_name;
-
-    if (persistedPaperName && persistedPaperName !== selectedPaperName) {
-      selectPaper(persistedPaperName);
-    }
-  }, [conversationQuery.data?.paper_name, selectedPaperName, selectPaper]);
+  const activePaperName = activeConversationId
+    ? persistedPaperName ?? null
+    : selectedPaperName;
+  const sourceUnavailable = Boolean(
+    activeConversationId &&
+    !conversationQuery.isLoading &&
+    (!persistedPaperName ||
+      (!documentsQuery.isLoading &&
+        !documentsQuery.isError &&
+        !documentsQuery.data?.items.some(
+          (document) =>
+            document.paper_name === persistedPaperName &&
+            document.status === "completed",
+        ))),
+  );
+  const sourceAvailable = !sourceUnavailable;
 
   /**
    * Synchronize refs when the dynamic route changes.
@@ -132,6 +126,24 @@ export function ChatClient({ initialConversationId }: ChatClientProps) {
 
     return () => window.clearTimeout(resetState);
   }, [initialConversationId]);
+
+  useEffect(() => {
+    function resetForNewChat() {
+      abortControllerRef.current?.abort();
+      abortControllerRef.current = null;
+      activeAssistantIdRef.current = null;
+      conversationIdRef.current = undefined;
+      setConversationId(undefined);
+      setLiveMessages([]);
+      setInput("");
+      setError(null);
+      setStreamStatus(null);
+      setIsStreaming(false);
+    }
+
+    window.addEventListener("documind:new-chat", resetForNewChat);
+    return () => window.removeEventListener("documind:new-chat", resetForNewChat);
+  }, []);
 
   // ============================================================
   // Message helpers
@@ -166,7 +178,7 @@ export function ChatClient({ initialConversationId }: ChatClientProps) {
   async function handleSubmit(promptMessage: PromptInputMessage) {
     const submittedText = promptMessage.text.trim();
 
-    if (!submittedText || isStreaming || !selectedPaperName) {
+    if (!submittedText || isStreaming || !activePaperName) {
       return;
     }
 
@@ -182,6 +194,7 @@ export function ChatClient({ initialConversationId }: ChatClientProps) {
       figures: [],
       tables: [],
       status: "completed",
+      created_at: new Date().toISOString(),
     };
 
     const assistantMessage: ChatMessageType = {
@@ -193,6 +206,7 @@ export function ChatClient({ initialConversationId }: ChatClientProps) {
       tables: [],
       status: "streaming",
       retryPrompt: submittedText,
+      created_at: new Date().toISOString(),
     };
 
     activeAssistantIdRef.current = assistantId;
@@ -218,6 +232,23 @@ export function ChatClient({ initialConversationId }: ChatClientProps) {
     let resolvedConversationId = conversationIdRef.current;
 
     let streamCompleted = false;
+    let userMessageCached = false;
+
+    const cacheSubmittedUser = (targetConversationId: string) => {
+      if (userMessageCached) return;
+
+      cacheOptimisticUserMessage({
+        queryClient,
+        conversationId: targetConversationId,
+        message: userMessage,
+        paperName: activePaperName,
+      });
+      userMessageCached = true;
+    };
+
+    if (resolvedConversationId) {
+      cacheSubmittedUser(resolvedConversationId);
+    }
 
     try {
       await streamChat(
@@ -227,20 +258,26 @@ export function ChatClient({ initialConversationId }: ChatClientProps) {
           conversation_id: conversationIdRef.current,
 
           filter: {
-            paper_name: selectedPaperName,
+            paper_name: activePaperName,
           },
         },
         {
           onConversation: (data) => {
             resolvedConversationId = data.conversation_id;
 
+            cacheSubmittedUser(data.conversation_id);
+
             conversationIdRef.current = data.conversation_id;
 
             setConversationId(data.conversation_id);
 
-            const resolvedPaperName = data.paper_name ?? selectedPaperName;
+            const resolvedPaperName = data.paper_name ?? activePaperName;
 
-            if (resolvedPaperName && resolvedPaperName !== selectedPaperName) {
+            if (
+              !activeConversationId &&
+              resolvedPaperName &&
+              resolvedPaperName !== selectedPaperName
+            ) {
               selectPaper(resolvedPaperName);
             }
 
@@ -410,28 +447,26 @@ export function ChatClient({ initialConversationId }: ChatClientProps) {
   // ============================================================
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <ChatHeader
-        conversationId={conversationId}
+        conversationId={activeConversationId}
         fallbackPaperName={selectedPaperName}
       />
 
       <ChatHistory
-        conversationId={conversationId}
-        liveMessages={liveMessages}
+        conversationId={activeConversationId}
+        liveMessages={
+          activeConversationId === conversationId ? liveMessages : []
+        }
         onRetry={retryResponse}
       />
 
-      {streamStatus && (
-        <div className="shrink-0 border-t px-4 py-2 text-center text-xs text-muted-foreground">
-          {streamStatus.message}
-        </div>
-      )}
+      {streamStatus && <div className="shrink-0 px-4 py-1.5 text-center text-[11px] font-medium text-muted-foreground">{streamStatus.message}</div>}
 
       {error && (
         <div className="shrink-0 px-4 pt-3">
-          <div className="mx-auto max-w-4xl rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-            {error}
+          <div className="mx-auto flex max-w-3xl items-start gap-3 rounded-2xl border border-destructive/20 bg-destructive/8 px-4 py-3 text-sm text-destructive shadow-sm">
+            <span className="min-w-0 break-words leading-5">{error}</span>
           </div>
         </div>
       )}
@@ -446,58 +481,40 @@ export function ChatClient({ initialConversationId }: ChatClientProps) {
         </div>
       )}
 
-      <div className="shrink-0 border-t bg-background px-3 py-3 sm:px-4 sm:py-4">
-        <div className="mx-auto max-w-4xl">
-          <div className="mb-2 flex min-w-0 items-center justify-between gap-2">
-            <DocumentSelector disabled={Boolean(conversationId)} />
-
-            {!selectedPaperName && (
-              <span className="text-xs text-amber-600">
-                Select a document before asking.
-              </span>
-            )}
-          </div>
-
+      <div className="relative z-10 shrink-0 bg-gradient-to-t from-background via-background to-background/0 px-3 pb-4 pt-6 sm:px-6 sm:pb-6">
+        <div className="mx-auto max-w-3xl">
           <PromptInput
             onSubmit={handleSubmit}
-            className="rounded-2xl border shadow-sm"
+            className="rounded-[22px] border border-border/80 bg-card shadow-[0_1px_2px_rgb(40_30_20/0.05),0_12px_38px_rgb(40_30_20/0.09)] transition-shadow focus-within:border-primary/35 focus-within:shadow-[0_1px_2px_rgb(40_30_20/0.05),0_18px_46px_rgb(40_30_20/0.12)]"
           >
             <PromptInputTextarea
               value={input}
               onChange={(event) => setInput(event.target.value)}
               placeholder={
-                selectedPaperName
-                  ? "Ask about the selected paper..."
+                activePaperName
+                  ? "Ask about the selected document..."
                   : "Select a document first..."
               }
-              disabled={isStreaming || !selectedPaperName || !sourceAvailable}
-              className="min-h-14 resize-none"
+              disabled={isStreaming || !activePaperName || !sourceAvailable}
+              className="min-h-20 resize-none px-4 pb-2 pt-4 text-[15px] leading-6 placeholder:text-muted-foreground/70"
             />
-
-            <div className="flex items-center justify-between gap-3 px-3 pb-3">
-              <p className="truncate text-xs text-muted-foreground">
-                {selectedPaperName
-                  ? `Source: ${selectedPaperName}`
-                  : "No document selected"}
-              </p>
-
-              {isStreaming ? (
-                <Button
-                  type="button"
-                  size="icon"
-                  variant="outline"
-                  onClick={stopStreaming}
-                  aria-label="Stop generating"
-                >
-                  <StopCircle className="h-4 w-4" />
-                </Button>
-              ) : (
-                <PromptInputSubmit
-                  disabled={!input.trim() || !selectedPaperName || !sourceAvailable}
+            <PromptInputFooter className="px-3 pb-3">
+              <PromptInputTools>
+                <DocumentSelector
+                  disabled={Boolean(activeConversationId)}
+                  paperName={activeConversationId ? activePaperName : undefined}
+                  sourceLoading={Boolean(activeConversationId && conversationQuery.isLoading)}
                 />
-              )}
-            </div>
+              </PromptInputTools>
+              <PromptInputSubmit
+                status={isStreaming ? "streaming" : error ? "error" : "ready"}
+                onStop={stopStreaming}
+                className="size-9 rounded-xl"
+                disabled={!isStreaming && (!input.trim() || !activePaperName || !sourceAvailable)}
+              />
+            </PromptInputFooter>
           </PromptInput>
+          <p className="mt-2.5 text-center text-[10px] tracking-wide text-muted-foreground/75">DocuMind can make mistakes. Verify important details in the cited source.</p>
         </div>
       </div>
     </div>

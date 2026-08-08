@@ -106,12 +106,12 @@ export function DocumentCard({
   return (
     <article
       className={cn(
-        "rounded-xl border bg-card p-5 transition-colors",
-        selected && "border-primary ring-1 ring-primary",
+        "enterprise-panel h-full p-5 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_12px_34px_rgb(40_30_20/0.07)]",
+        selected && "border-primary/50 ring-2 ring-primary/10",
       )}
     >
       <div className="flex items-start gap-4">
-        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-muted">
+        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary">
           <FileText className="h-5 w-5" />
         </div>
 
@@ -119,7 +119,7 @@ export function DocumentCard({
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
               <h3
-                className="truncate font-medium"
+                className="truncate text-[14px] font-semibold tracking-[-0.01em]"
                 title={document.original_filename}
               >
                 {document.original_filename}
@@ -145,17 +145,13 @@ export function DocumentCard({
             </Badge>
           </div>
 
-          <div className="mt-4 flex flex-wrap gap-x-5 gap-y-2 text-xs text-muted-foreground">
-            <span>{formatBytes(document.file_size_bytes)}</span>
-
-            <span>{document.chunks_count ?? 0} chunks</span>
-
-            <span>{document.elements_count ?? 0} elements</span>
-
-            <span>
-              Updated {new Date(document.updated_at).toLocaleString()}
-            </span>
+          <div className="mt-5 grid grid-cols-3 overflow-hidden rounded-xl border border-border/60 bg-muted/20 text-center">
+            <span className="px-2 py-3"><strong className="block text-[13px] font-semibold text-foreground">{formatBytes(document.file_size_bytes)}</strong><small className="text-[10px] uppercase tracking-wide">Size</small></span>
+            <span className="border-x border-border/60 px-2 py-3"><strong className="block text-[13px] font-semibold text-foreground">{document.chunks_count ?? 0}</strong><small className="text-[10px] uppercase tracking-wide">Chunks</small></span>
+            <span className="px-2 py-3"><strong className="block text-[13px] font-semibold text-foreground">{document.elements_count ?? 0}</strong><small className="text-[10px] uppercase tracking-wide">Elements</small></span>
           </div>
+
+          <p className="mt-2 text-[10px] text-muted-foreground">Updated {new Date(document.updated_at).toLocaleString()}</p>
 
           {document.error_message && (
             <div className="mt-4 flex gap-2 rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">
@@ -171,7 +167,7 @@ export function DocumentCard({
             </p>
           )}
 
-          <div className="mt-5 flex flex-wrap gap-2">
+          <div className="mt-5 flex flex-wrap gap-2 border-t border-border/60 pt-4">
             <Button
               type="button"
               size="sm"

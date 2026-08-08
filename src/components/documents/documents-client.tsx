@@ -300,7 +300,7 @@ export function DocumentsClient() {
     resetIngestionFeedback();
 
     setError(
-      `Select "${document.original_filename}" or another PDF with the same paper name to replace this document.`,
+      `Select "${document.original_filename}" or another PDF with the same document name to replace it.`,
     );
 
     inputRef.current?.click();
@@ -345,24 +345,25 @@ export function DocumentsClient() {
   return (
     <>
       <div className="h-full overflow-y-auto">
-        <div className="mx-auto max-w-6xl space-y-8 px-5 py-8 md:px-8">
+        <div className="mx-auto max-w-6xl space-y-8 px-4 py-8 sm:px-6 md:py-12 lg:px-10">
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight">Documents</h1>
+            <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-primary">Knowledge base</p>
+            <h1 className="font-serif text-3xl font-medium tracking-[-0.025em] sm:text-4xl">Your document library</h1>
 
             <p className="mt-2 text-sm text-muted-foreground">
-              Upload research papers, track ingestion progress, and choose a
+              Upload PDF documents, track processing progress, and choose a
               retrieval source for chat.
             </p>
           </div>
 
-          <section className="space-y-4 rounded-xl border bg-card p-5">
+          <section className="enterprise-panel space-y-5 p-5 sm:p-6">
             <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-muted">
+              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-primary/10 text-primary">
                 <FileUp className="h-5 w-5" />
               </div>
 
               <div>
-                <h2 className="font-medium">Upload PDF</h2>
+                <h2 className="text-[15px] font-semibold">Add a PDF document</h2>
 
                 <p className="text-sm text-muted-foreground">
                   Maximum file size: {MAX_UPLOAD_SIZE_MB} MB.
@@ -376,6 +377,7 @@ export function DocumentsClient() {
               accept=".pdf,application/pdf"
               disabled={isIngesting}
               onChange={handleFileChange}
+              className="h-14 cursor-pointer rounded-xl border-dashed bg-muted/20 px-4 py-2 leading-9 file:mr-4 file:h-9 file:align-middle file:rounded-lg file:border-0 file:bg-primary/10 file:px-3 file:py-0 file:text-xs file:font-semibold file:leading-9 file:text-primary"
             />
 
             {selectedFile && (
@@ -426,7 +428,7 @@ export function DocumentsClient() {
           <section className="space-y-4">
             <div className="flex items-end justify-between gap-4">
               <div>
-                <h2 className="text-lg font-semibold">Available papers</h2>
+                <h2 className="font-serif text-2xl font-medium tracking-[-0.02em]">Available documents</h2>
 
                 <p className="mt-1 text-sm text-muted-foreground">
                   Choose one as the retrieval source for chat.
@@ -463,12 +465,12 @@ export function DocumentsClient() {
                   <h3 className="mt-4 font-medium">No documents yet</h3>
 
                   <p className="mt-2 text-sm text-muted-foreground">
-                    Upload your first research paper to begin.
+                    Upload your first PDF document to begin.
                   </p>
                 </div>
               )}
 
-            <div className="grid gap-4">
+            <div className="grid gap-4 xl:grid-cols-2">
               {documents.map((document) => (
                 <DocumentCard
                   key={document.id}

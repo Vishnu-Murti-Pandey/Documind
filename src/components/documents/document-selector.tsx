@@ -16,9 +16,15 @@ import { useDocuments } from "@/features/documents/queries";
 
 type DocumentSelectorProps = {
   disabled?: boolean;
+  paperName?: string | null;
+  sourceLoading?: boolean;
 };
 
-export function DocumentSelector({ disabled = false }: DocumentSelectorProps) {
+export function DocumentSelector({
+  disabled = false,
+  paperName,
+  sourceLoading = false,
+}: DocumentSelectorProps) {
   const documentsQuery = useDocuments(0, 50);
 
   const selectedPaperName = useDocumentSelectionStore(
@@ -26,8 +32,9 @@ export function DocumentSelector({ disabled = false }: DocumentSelectorProps) {
   );
 
   const selectPaper = useDocumentSelectionStore((state) => state.selectPaper);
+  const effectivePaperName = paperName === undefined ? selectedPaperName : paperName;
 
-  if (documentsQuery.isLoading) {
+  if (documentsQuery.isLoading || sourceLoading) {
     return <Skeleton className="h-8 w-44" />;
   }
 
@@ -37,7 +44,7 @@ export function DocumentSelector({ disabled = false }: DocumentSelectorProps) {
     ) ?? [];
 
   const selectedDocument = documents.find(
-    (document) => document.paper_name === selectedPaperName,
+    (document) => document.paper_name === effectivePaperName,
   );
 
   return (
@@ -47,8 +54,8 @@ export function DocumentSelector({ disabled = false }: DocumentSelectorProps) {
           <Button
             type="button"
             size="sm"
-            variant="ghost"
-            className="max-w-[min(260px,65vw)]"
+            variant="secondary"
+            className="max-w-[min(280px,68vw)] rounded-xl border-0 bg-muted/70 px-3 text-[11px] font-semibold shadow-none hover:bg-muted"
             disabled={disabled}
             aria-label="Select document"
           />
@@ -58,7 +65,7 @@ export function DocumentSelector({ disabled = false }: DocumentSelectorProps) {
 
         <span className="truncate">
           {selectedDocument?.original_filename ||
-            selectedPaperName ||
+            effectivePaperName ||
             "Select document"}
         </span>
 
@@ -71,7 +78,7 @@ export function DocumentSelector({ disabled = false }: DocumentSelectorProps) {
         )}
 
         {documents.map((document) => {
-          const selected = document.paper_name === selectedPaperName;
+          const selected = document.paper_name === effectivePaperName;
 
           return (
             <DropdownMenuItem

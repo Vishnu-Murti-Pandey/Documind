@@ -7,6 +7,7 @@ import { ThemeProvider } from "next-themes";
 
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
+import { SystemThemeSync } from "@/components/layout/system-theme-sync";
 
 type ProvidersProps = {
   children: ReactNode;
@@ -30,8 +31,9 @@ export function Providers({ children }: ProvidersProps) {
   );
 
   return (
-    <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
+    <ThemeProvider attribute="class" defaultTheme="system" enableSystem enableColorScheme disableTransitionOnChange storageKey="documind-theme">
       <QueryClientProvider client={queryClient}>
+        <SystemThemeSync />
         <TooltipProvider>{children}</TooltipProvider>
         <Toaster richColors position="bottom-right" />
 

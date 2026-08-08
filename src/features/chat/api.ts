@@ -25,14 +25,22 @@ export async function getConversationMessages(
 export function mapPersistedMessages(
   response: ConversationMessagesResponse,
 ): ChatMessage[] {
-  return response.messages.map((message) => ({
-    id: message.id,
-    role: message.role,
-    content: message.content,
-    citations: message.citations ?? [],
-    figures: message.figures ?? [],
-    tables: message.tables ?? [],
-    createdAt: message.created_at,
-    status: "completed",
-  }));
+  return response.messages.flatMap((message): ChatMessage[] => {
+    if (message.role !== "user" && message.role !== "assistant") {
+      return [];
+    }
+
+    return [
+      {
+        id: message.id,
+        role: message.role,
+        content: message.content,
+        citations: message.citations ?? [],
+        figures: message.figures ?? [],
+        tables: message.tables ?? [],
+        created_at: message.created_at,
+        status: "completed",
+      },
+    ];
+  });
 }

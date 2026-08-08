@@ -41,7 +41,7 @@ export function OverwriteDocumentDialog({
           <DialogTitle>Replace existing document?</DialogTitle>
 
           <DialogDescription>
-            A document with this paper name already exists. Continuing will
+            A document with this name already exists. Continuing will
             delete its existing vectors and assets before ingesting the uploaded
             PDF again.
           </DialogDescription>

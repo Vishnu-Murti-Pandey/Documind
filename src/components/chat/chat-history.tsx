@@ -1,10 +1,11 @@
 "use client";
 
-import { ArrowDown, LoaderCircle } from "lucide-react";
+import { ArrowDown, LibraryBig, LoaderCircle } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { ChatMessage } from "@/components/chat/chat-message";
 import { Button } from "@/components/ui/button";
+import { ConversationEmptyState } from "@/components/ai-elements/conversation";
 import { mapPersistedMessages } from "@/features/chat/api";
 import { useInfiniteConversationMessages } from "@/features/chat/queries";
 import type { ChatMessage as ChatMessageType } from "@/features/chat/types";
@@ -26,7 +27,7 @@ export function ChatHistory({
 
   const initialScrollCompletedRef = useRef(false);
   const nearBottomRef = useRef(true);
-  const previousLiveLengthRef = useRef(0);
+  const latestSubmittedUserIdRef = useRef<string | null>(null);
   const [showLatestButton, setShowLatestButton] = useState(false);
 
   const messagesQuery = useInfiniteConversationMessages(conversationId);
@@ -43,10 +44,34 @@ export function ChatHistory({
   );
 
   const combinedMessages = useMemo(() => {
+    const latestPersistedUser = [...persistedMessages]
+      .reverse()
+      .find((message) => message.role === "user");
+
     const messages = [
       ...persistedMessages,
 
-      ...liveMessages.filter((message) => !persistedIds.has(message.id)),
+      ...liveMessages.filter((message) => {
+        if (persistedIds.has(message.id)) {
+          return false;
+        }
+
+        // The backend persists the current user message before generation and
+        // returns a database ID. Reconcile that row with its optimistic copy
+        // by content so both are not shown during the response stream.
+        if (
+          message.role === "user" &&
+          latestPersistedUser?.content === message.content &&
+          message.created_at &&
+          latestPersistedUser.created_at &&
+          new Date(latestPersistedUser.created_at).getTime() >=
+            new Date(message.created_at).getTime()
+        ) {
+          return false;
+        }
+
+        return true;
+      }),
     ];
     return messages.map((message, index) => message.role === "assistant" && !message.retryPrompt ? { ...message, retryPrompt: [...messages.slice(0, index)].reverse().find((item) => item.role === "user")?.content } : message);
   }, [persistedMessages, liveMessages, persistedIds]);
@@ -87,18 +112,28 @@ export function ChatHistory({
     previousScrollHeightRef.current = null;
   }, [persistedMessages.length]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const element = scrollRef.current;
     if (!element || !initialScrollCompletedRef.current) return;
-    const isNewMessage = liveMessages.length > previousLiveLengthRef.current;
-    if (isNewMessage) {
-      const newestUser = [...liveMessages].reverse().find((message) => message.role === "user");
-      const target = newestUser ? element.querySelector(`[data-message-id="${newestUser.id}"]`) : null;
-      target?.scrollIntoView({ block: "start", behavior: "smooth" });
+
+    const newestUser = [...liveMessages]
+      .reverse()
+      .find((message) => message.role === "user");
+    const isNewSubmission =
+      newestUser && newestUser.id !== latestSubmittedUserIdRef.current;
+
+    if (isNewSubmission) {
+      // Keep the submitted question and assistant placeholder next to the
+      // fixed composer. Element-level viewport scrolling can move outer
+      // ancestors, so update only this container's scroll position.
+      latestSubmittedUserIdRef.current = newestUser.id;
+      nearBottomRef.current = true;
+      setShowLatestButton(false);
+      element.scrollTop = element.scrollHeight;
     } else if (nearBottomRef.current) {
-      element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
+      // Follow streaming tokens without queuing smooth-scroll animations.
+      element.scrollTop = element.scrollHeight;
     }
-    previousLiveLengthRef.current = liveMessages.length;
   }, [liveMessages]);
 
   async function loadOlderMessages() {
@@ -134,16 +169,16 @@ export function ChatHistory({
 
   if (conversationId && messagesQuery.isLoading) {
     return (
-      <div className="flex h-full items-center justify-center">
+      <div className="flex min-h-0 flex-1 items-center justify-center">
         <LoaderCircle className="h-5 w-5 animate-spin text-muted-foreground" />
       </div>
     );
   }
 
   return (
-    <div className="relative min-h-0 flex-1">
-    <div ref={scrollRef} onScroll={handleScroll} className="h-full overflow-y-auto">
-      <div className="mx-auto flex w-full max-w-4xl flex-col gap-6 px-4 py-8 md:px-8">
+    <div className="relative min-h-0 flex-1 overflow-hidden">
+    <div ref={scrollRef} onScroll={handleScroll} className="h-full overscroll-contain overflow-y-auto [overflow-anchor:none]">
+      <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col gap-8 px-4 pb-10 pt-10 md:px-6 md:pb-12 md:pt-14">
         {messagesQuery.hasNextPage && (
           <div className="flex justify-center">
             <Button
@@ -160,6 +195,9 @@ export function ChatHistory({
           </div>
         )}
 
+        {combinedMessages.length === 0 && (
+          <ConversationEmptyState className="my-auto min-h-[52vh]" icon={<span className="flex size-12 items-center justify-center rounded-2xl bg-primary/10 text-primary"><LibraryBig className="size-5" /></span>} title="Ask your document library" description="Select a source and explore it with grounded answers, figures, tables, and precise citations." />
+        )}
         {combinedMessages.map((message) => (
           <ChatMessage key={message.id} message={message} onRetry={onRetry} />
         ))}

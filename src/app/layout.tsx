@@ -7,7 +7,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "DocuMind",
-  description: "Multimodal research-paper assistant",
+  description: "Multimodal assistant for your PDF documents",
 };
 
 type RootLayoutProps = Readonly<{

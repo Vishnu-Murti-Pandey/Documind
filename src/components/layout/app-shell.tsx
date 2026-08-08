@@ -23,7 +23,7 @@ export function AppShell({ children }: AppShellProps) {
   } = useSidebarStore();
 
   return (
-    <div className="flex h-dvh overflow-hidden bg-background">
+    <div className="flex h-dvh overflow-hidden bg-background text-foreground">
       <div className="hidden lg:block">
         <ConversationSidebar
           collapsed={desktopCollapsed}
@@ -40,7 +40,7 @@ export function AppShell({ children }: AppShellProps) {
       </Sheet>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-14 shrink-0 items-center border-b px-4 lg:hidden">
+        <header className="flex h-16 shrink-0 items-center border-b border-border/70 bg-background/85 px-4 backdrop-blur-xl lg:hidden">
           <Button
             type="button"
             variant="ghost"
@@ -51,7 +51,7 @@ export function AppShell({ children }: AppShellProps) {
             <Menu className="h-5 w-5" />
           </Button>
 
-          <span className="ml-3 font-semibold">DocuMind</span>
+          <span className="ml-3 text-[15px] font-semibold tracking-[-0.02em]">DocuMind</span>
           <div className="ml-auto"><ThemeToggle /></div>
         </header>
 

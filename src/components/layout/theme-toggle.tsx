@@ -37,7 +37,7 @@ export function ThemeToggle({ showLabel = false }: ThemeToggleProps) {
         {showLabel && (
           <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
             <span>Theme</span>
-            <span className="truncate text-xs capitalize text-muted-foreground">
+            <span suppressHydrationWarning className="truncate text-xs capitalize text-muted-foreground">
               {theme ?? "system"}
             </span>
           </span>

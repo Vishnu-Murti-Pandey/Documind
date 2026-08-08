@@ -50,7 +50,7 @@ export function DeleteConversationDialog({
               event.preventDefault();
               onConfirm();
             }}
-            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            className="border border-destructive/20 bg-destructive/10 text-destructive shadow-none hover:bg-destructive/20 dark:border-destructive/30 dark:bg-destructive/20 dark:hover:bg-destructive/30"
           >
             {pending ? "Deleting..." : "Delete"}
           </AlertDialogAction>

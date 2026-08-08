@@ -2,6 +2,7 @@
 
 import {
   FileText,
+  LibraryBig,
   MessageSquarePlus,
   PanelLeftClose,
   PanelLeftOpen,
@@ -108,7 +109,12 @@ export function ConversationSidebar({
   const newChatLink = (
     <Link
       href="/chat"
-      onClick={onNavigate}
+      onClick={() => {
+        if (pathname.startsWith("/chat")) {
+          window.dispatchEvent(new Event("documind:new-chat"));
+        }
+        onNavigate?.();
+      }}
       className={cn(
         buttonVariants({
           variant: "default",
@@ -147,13 +153,13 @@ export function ConversationSidebar({
     <>
       <aside
         className={cn(
-          "flex h-full flex-col border-r bg-muted/30 transition-[width] duration-200",
-          collapsed ? "w-[72px]" : "w-[280px]",
+          "flex h-full flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground transition-[width] duration-300 ease-out",
+          collapsed ? "w-[72px]" : "w-[292px]",
         )}
       >
         <div
           className={cn(
-            "flex h-16 items-center gap-2 px-3",
+            "flex h-[72px] items-center gap-2 px-3",
             collapsed ? "justify-center" : "justify-between",
           )}
         >
@@ -161,9 +167,10 @@ export function ConversationSidebar({
             <Link
               href="/chat"
               onClick={onNavigate}
-              className="text-lg font-semibold tracking-tight"
+              className="flex items-center gap-2.5 px-1 text-[15px] font-semibold tracking-[-0.025em]"
             >
-              DocuMind
+              <span className="flex size-8 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm"><LibraryBig className="size-4" /></span>
+              <span>DocuMind</span>
             </Link>
           )}
 
@@ -196,7 +203,7 @@ export function ConversationSidebar({
           )}
         </div>
 
-        <div className="px-3 pb-3">
+        <div className="px-3 pb-4">
           {collapsed ? (
             <Tooltip>
               <TooltipTrigger render={newChatLink} />
@@ -212,13 +219,13 @@ export function ConversationSidebar({
 
         <div className="flex min-h-0 flex-1 flex-col">
           {!collapsed && (
-            <div className="px-4 pb-2 pt-4 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-              Recent conversations
+            <div className="px-4 pb-2 pt-5 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+              Workspace
             </div>
           )}
 
           <ScrollArea className="min-h-0 flex-1 px-2">
-            <div className="space-y-1 py-2">
+            <div className="space-y-0.5 py-2">
               {conversationsQuery.isLoading &&
                 Array.from({
                   length: 6,

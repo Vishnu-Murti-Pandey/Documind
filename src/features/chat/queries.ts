@@ -17,6 +17,10 @@ export function useInfiniteConversationMessages(conversationId?: string) {
 
     enabled: Boolean(conversationId),
 
+    // A conversation can receive messages while its route is not mounted.
+    // Always reconcile optimistic/cache state when the user opens it again.
+    refetchOnMount: "always",
+
     initialPageParam: null as string | null,
 
     queryFn: ({ pageParam }) =>

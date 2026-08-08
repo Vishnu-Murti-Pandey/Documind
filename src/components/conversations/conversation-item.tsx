@@ -85,21 +85,21 @@ export function ConversationItem({
   return (
     <div
       className={cn(
-        "group flex min-w-0 items-center gap-1 rounded-md",
-        isActive && "bg-accent",
+        "group flex min-w-0 items-center gap-1 rounded-xl",
+        isActive && "bg-sidebar-accent",
       )}
     >
       <Link
         href={conversationHref}
         onClick={onNavigate}
         className={cn(
-          "min-w-0 flex-1 rounded-md px-3 py-2 transition-colors",
+          "min-w-0 flex-1 rounded-xl px-3 py-2.5 transition-all duration-200",
           isActive
-            ? "text-accent-foreground"
-            : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+            ? "text-sidebar-accent-foreground"
+            : "text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-foreground",
         )}
       >
-        <p className="truncate text-sm" title={title}>
+        <p className="truncate text-[13px] font-medium" title={title}>
           {title}
         </p>
 

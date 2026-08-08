@@ -59,7 +59,7 @@ export function IngestionProgress({
 
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium">
-            {fileName || data.paper_name || "Research paper"}
+            {fileName || data.paper_name || "PDF document"}
           </p>
 
           <p className="mt-1 text-sm text-muted-foreground">
