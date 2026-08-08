@@ -135,7 +135,7 @@ class ConversationMemoryService:
         return ConversationMemoryContext(
             conversation=conversation,
             is_new_conversation=is_new,
-            messages=messages,
+            history=messages,
             llm_history=llm_history,
         )
 

@@ -43,6 +43,7 @@ class ConversationDetailResponse(BaseModel):
     conversation_id: str
     title: str | None
     summary: str | None
+    paper_name: str | None
     is_active: bool
 
     created_at: datetime
