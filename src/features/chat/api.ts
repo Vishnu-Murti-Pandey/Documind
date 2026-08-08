@@ -4,13 +4,16 @@ import type { ChatMessage, ConversationMessagesResponse } from "./types";
 
 export async function getConversationMessages(
   conversationId: string,
-  page = 0,
-  limit = 100,
+  cursor?: string | null,
+  limit = 20,
 ): Promise<ConversationMessagesResponse> {
   const searchParams = new URLSearchParams({
-    page: String(page),
     limit: String(limit),
   });
+
+  if (cursor) {
+    searchParams.set("cursor", cursor);
+  }
 
   return apiFetch<ConversationMessagesResponse>(
     `/api/conversations/${encodeURIComponent(

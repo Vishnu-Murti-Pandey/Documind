@@ -46,7 +46,7 @@ export function ConversationItem({
 
   if (collapsed) {
     return (
-      <div className="flex items-center">
+      <div className="group flex min-w-0 items-center gap-1 rounded-md">
         <Tooltip>
           <TooltipTrigger
             render={
@@ -66,7 +66,17 @@ export function ConversationItem({
             {title.charAt(0).toUpperCase()}
           </TooltipTrigger>
 
-          <TooltipContent side="right">{title}</TooltipContent>
+          <TooltipContent side="right">
+            <div className="max-w-64">
+              <p className="font-medium">{title}</p>
+
+              {conversation.paper_name && (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Source: {conversation.paper_name}
+                </p>
+              )}
+            </div>
+          </TooltipContent>
         </Tooltip>
       </div>
     );
@@ -83,14 +93,24 @@ export function ConversationItem({
         href={conversationHref}
         onClick={onNavigate}
         className={cn(
-          "min-w-0 flex-1 truncate rounded-md px-3 py-2 text-sm transition-colors",
+          "min-w-0 flex-1 rounded-md px-3 py-2 transition-colors",
           isActive
             ? "text-accent-foreground"
             : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
         )}
-        title={title}
       >
-        {title}
+        <p className="truncate text-sm" title={title}>
+          {title}
+        </p>
+
+        {conversation.paper_name && (
+          <p
+            className="mt-0.5 truncate text-[11px] text-muted-foreground"
+            title={conversation.paper_name}
+          >
+            {conversation.paper_name}
+          </p>
+        )}
       </Link>
 
       <DropdownMenu>

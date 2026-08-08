@@ -1,26 +1,37 @@
 "use client";
 
-import { FileUp, LoaderCircle, Upload } from "lucide-react";
+import { FileUp, Upload } from "lucide-react";
 import { useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
+import { DeleteDocumentDialog } from "@/components/documents/delete-document-dialog";
 import { DocumentCard } from "@/components/documents/document-card";
 import { IngestionProgress } from "@/components/documents/ingestion-progress";
+import { OverwriteDocumentDialog } from "@/components/documents/overwrite-document-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 
+import { useDocumentSelectionStore } from "@/features/documents/document-store";
+import {
+  cancelDocumentIngestion,
+  streamDocumentIngestion,
+} from "@/features/documents/ingestion-stream";
 import {
   documentKeys,
   useDeleteDocument,
   useDocuments,
 } from "@/features/documents/queries";
-import { useDocumentSelectionStore } from "@/features/documents/document-store";
-import { streamDocumentIngestion } from "@/features/documents/ingestion-stream";
 import type {
+  DocumentItem,
   IngestionEventData,
   IngestionEventType,
 } from "@/features/documents/types";
+import { toast } from "sonner";
+
+const MAX_UPLOAD_SIZE_MB = 50;
+
+const MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024;
 
 export function DocumentsClient() {
   const queryClient = useQueryClient();
@@ -38,10 +49,11 @@ export function DocumentsClient() {
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   const abortControllerRef = useRef<AbortController | null>(null);
+  const activeDocumentIdRef = useRef<string | null>(null);
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
 
-  const [overwrite, setOverwrite] = useState(false);
+  const [lastAttemptedFile, setLastAttemptedFile] = useState<File | null>(null);
 
   const [ingestionEventType, setIngestionEventType] =
     useState<IngestionEventType | null>(null);
@@ -54,6 +66,24 @@ export function DocumentsClient() {
 
   const [error, setError] = useState<string | null>(null);
 
+  const [deleteTarget, setDeleteTarget] = useState<DocumentItem | null>(null);
+
+  const [overwriteDialogOpen, setOverwriteDialogOpen] = useState(false);
+
+  const [pendingOverwriteFile, setPendingOverwriteFile] = useState<File | null>(
+    null,
+  );
+
+  // --------------------------------------------------
+  // File selection
+  // --------------------------------------------------
+
+  function resetIngestionFeedback() {
+    setError(null);
+    setIngestionEventType(null);
+    setIngestionData(null);
+  }
+
   function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
 
@@ -61,31 +91,64 @@ export function DocumentsClient() {
       return;
     }
 
-    if (
-      file.type !== "application/pdf" &&
-      !file.name.toLowerCase().endsWith(".pdf")
-    ) {
-      setError("Please select a PDF file.");
+    resetIngestionFeedback();
+
+    const isPdf =
+      file.type === "application/pdf" ||
+      file.name.toLowerCase().endsWith(".pdf");
+
+    if (!isPdf) {
+      setError("Please select a valid PDF file.");
 
       event.target.value = "";
+      setSelectedFile(null);
+
+      return;
+    }
+
+    if (file.size > MAX_UPLOAD_SIZE_BYTES) {
+      setError(`The PDF exceeds the ${MAX_UPLOAD_SIZE_MB} MB upload limit.`);
+
+      event.target.value = "";
+      setSelectedFile(null);
+
+      return;
+    }
+
+    if (file.size === 0) {
+      setError("The selected PDF is empty.");
+
+      event.target.value = "";
+      setSelectedFile(null);
 
       return;
     }
 
     setSelectedFile(file);
-    setOverwrite(false);
-    setError(null);
-    setIngestionEventType(null);
-    setIngestionData(null);
+    setLastAttemptedFile(null);
   }
 
-  async function beginIngestion(shouldOverwrite = overwrite) {
-    if (!selectedFile || isIngesting) {
+  // --------------------------------------------------
+  // Ingestion
+  // --------------------------------------------------
+
+  async function beginIngestion(file: File, overwrite = false) {
+    if (isIngesting) {
       return;
     }
 
     setError(null);
     setIsIngesting(true);
+    setLastAttemptedFile(file);
+
+    setIngestionEventType("status");
+
+    setIngestionData({
+      stage: "uploading",
+      message: "Uploading document...",
+      progress: 0,
+      filename: file.name,
+    });
 
     const controller = new AbortController();
 
@@ -93,14 +156,18 @@ export function DocumentsClient() {
 
     try {
       await streamDocumentIngestion(
-        selectedFile,
+        file,
         {
           onEvent: (eventType, data) => {
+            if (data.document_id) {
+              activeDocumentIdRef.current = data.document_id;
+            }
             setIngestionEventType(eventType);
 
             setIngestionData(data);
 
             if (eventType === "completed") {
+              toast.success("Document uploaded");
               void queryClient.invalidateQueries({
                 queryKey: documentKeys.all,
               });
@@ -109,25 +176,50 @@ export function DocumentsClient() {
                 selectPaper(data.paper_name);
               }
             }
+
+            if (eventType === "error") {
+              toast.error(data.detail || data.message || "Document ingestion failed.");
+              setError(
+                data.detail || data.message || "Document ingestion failed.",
+              );
+            }
           },
 
           onError: (streamError) => {
             setError(streamError.message);
+            toast.error(streamError.message);
           },
         },
         {
-          overwrite: shouldOverwrite,
+          overwrite,
           signal: controller.signal,
         },
       );
 
       setSelectedFile(null);
-      setOverwrite(false);
+      setPendingOverwriteFile(null);
+      setOverwriteDialogOpen(false);
 
       if (inputRef.current) {
         inputRef.current.value = "";
       }
     } catch (ingestionError) {
+      const aborted = controller.signal.aborted;
+
+      if (aborted) {
+        setIngestionEventType("error");
+
+        setIngestionData({
+          status: "failed",
+          stage: "cancelled",
+          message: "Document ingestion was stopped.",
+          detail: "The upload or processing request was cancelled.",
+          progress: ingestionData?.progress ?? 0,
+        });
+
+        return;
+      }
+
       const message =
         ingestionError instanceof Error
           ? ingestionError.message
@@ -135,206 +227,293 @@ export function DocumentsClient() {
 
       setError(message);
 
-      if (message.toLowerCase().includes("already exists")) {
-        setOverwrite(true);
+      const duplicate = message.toLowerCase().includes("already exists");
+
+      if (duplicate && !overwrite) {
+        setPendingOverwriteFile(file);
+
+        setOverwriteDialogOpen(true);
+
+        return;
       }
+
+      setIngestionEventType("error");
+
+      setIngestionData({
+        status: "failed",
+        message: "Document ingestion failed.",
+        detail: message,
+        progress: ingestionData?.progress ?? 0,
+      });
     } finally {
       abortControllerRef.current = null;
+      activeDocumentIdRef.current = null;
 
       setIsIngesting(false);
     }
   }
 
-  function stopIngestion() {
-    abortControllerRef.current?.abort();
+  async function stopIngestion() {
+    const documentId = activeDocumentIdRef.current;
 
-    abortControllerRef.current = null;
-
-    setIsIngesting(false);
+    try {
+      if (documentId) {
+        await cancelDocumentIngestion(documentId);
+      }
+    } catch (cancelError) {
+      toast.error(
+        cancelError instanceof Error
+          ? cancelError.message
+          : "Could not stop document ingestion.",
+      );
+    } finally {
+      abortControllerRef.current?.abort();
+      void queryClient.invalidateQueries({ queryKey: documentKeys.all });
+    }
   }
 
-  function handleReingest(paperName: string) {
-    const matchingDocument = documentsQuery.data?.items.find(
-      (document) => document.paper_name === paperName,
-    );
-
-    if (!matchingDocument) {
+  function retryLastIngestion() {
+    if (!lastAttemptedFile || isIngesting) {
       return;
     }
 
-    setError("Choose the original PDF again, then select overwrite.");
+    void beginIngestion(lastAttemptedFile, false);
+  }
 
-    setOverwrite(true);
+  function confirmOverwrite() {
+    if (!pendingOverwriteFile || isIngesting) {
+      return;
+    }
+
+    void beginIngestion(pendingOverwriteFile, true);
+  }
+
+  // --------------------------------------------------
+  // Re-ingestion
+  // --------------------------------------------------
+
+  function handleReingest(document: DocumentItem) {
+    if (isIngesting) {
+      return;
+    }
+
+    resetIngestionFeedback();
+
+    setError(
+      `Select "${document.original_filename}" or another PDF with the same paper name to replace this document.`,
+    );
 
     inputRef.current?.click();
   }
 
-  async function handleDelete(paperName: string) {
-    const confirmed = window.confirm(
-      "Delete this document, its vectors, and its stored assets?",
-    );
+  // --------------------------------------------------
+  // Delete
+  // --------------------------------------------------
 
-    if (!confirmed) {
+  function handleDeleteConfirm() {
+    if (!deleteTarget || isIngesting) {
       return;
     }
+
+    const paperName = deleteTarget.paper_name;
 
     deleteMutation.mutate(paperName, {
       onSuccess: () => {
         if (selectedPaperName === paperName) {
           selectPaper(null);
         }
+
+        setDeleteTarget(null);
+        toast.success("Document deleted");
+      },
+
+      onError: (deleteError) => {
+        setError(
+          deleteError instanceof Error
+            ? deleteError.message
+            : "Could not delete document.",
+        );
+        toast.error(deleteError instanceof Error ? deleteError.message : "Could not delete document.");
       },
     });
   }
 
   const documents = documentsQuery.data?.items ?? [];
 
+  const anyActionPending = isIngesting || deleteMutation.isPending;
+
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-6xl space-y-8 px-5 py-8 md:px-8">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Documents</h1>
+    <>
+      <div className="h-full overflow-y-auto">
+        <div className="mx-auto max-w-6xl space-y-8 px-5 py-8 md:px-8">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight">Documents</h1>
 
-          <p className="mt-2 text-sm text-muted-foreground">
-            Upload research papers, track ingestion progress, and choose which
-            paper DocuMind should use.
-          </p>
-        </div>
-
-        <section className="space-y-4 rounded-xl border bg-card p-5">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-muted">
-              <FileUp className="h-5 w-5" />
-            </div>
-
-            <div>
-              <h2 className="font-medium">Upload PDF</h2>
-
-              <p className="text-sm text-muted-foreground">
-                The backend will parse, enrich, embed, and store the paper.
-              </p>
-            </div>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Upload research papers, track ingestion progress, and choose a
+              retrieval source for chat.
+            </p>
           </div>
 
-          <Input
-            ref={inputRef}
-            type="file"
-            accept=".pdf,application/pdf"
-            disabled={isIngesting}
-            onChange={handleFileChange}
-          />
+          <section className="space-y-4 rounded-xl border bg-card p-5">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-muted">
+                <FileUp className="h-5 w-5" />
+              </div>
 
-          {selectedFile && (
-            <div className="rounded-lg bg-muted p-3 text-sm">
-              <p className="font-medium">{selectedFile.name}</p>
+              <div>
+                <h2 className="font-medium">Upload PDF</h2>
 
-              <p className="mt-1 text-xs text-muted-foreground">
-                {(selectedFile.size / 1024 / 1024).toFixed(2)} MB
-              </p>
-            </div>
-          )}
-
-          {overwrite && (
-            <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm">
-              This paper already exists. Uploading with overwrite will replace
-              its Qdrant vectors and stored assets.
-            </div>
-          )}
-
-          {error && (
-            <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-              {error}
-            </div>
-          )}
-
-          <div className="flex flex-wrap gap-2">
-            {isIngesting ? (
-              <Button type="button" variant="outline" onClick={stopIngestion}>
-                Stop ingestion
-              </Button>
-            ) : (
-              <Button
-                type="button"
-                disabled={!selectedFile}
-                onClick={() => void beginIngestion(overwrite)}
-              >
-                <Upload className="h-4 w-4" />
-
-                {overwrite ? "Overwrite and ingest" : "Upload and ingest"}
-              </Button>
-            )}
-          </div>
-        </section>
-
-        <IngestionProgress
-          eventType={ingestionEventType}
-          data={ingestionData}
-          fileName={selectedFile?.name}
-        />
-
-        <section className="space-y-4">
-          <div className="flex items-end justify-between gap-4">
-            <div>
-              <h2 className="text-lg font-semibold">Available papers</h2>
-
-              <p className="mt-1 text-sm text-muted-foreground">
-                Choose one as the retrieval source for chat.
-              </p>
+                <p className="text-sm text-muted-foreground">
+                  Maximum file size: {MAX_UPLOAD_SIZE_MB} MB.
+                </p>
+              </div>
             </div>
 
-            <span className="text-sm text-muted-foreground">
-              {documentsQuery.data?.total ?? 0} documents
-            </span>
-          </div>
+            <Input
+              ref={inputRef}
+              type="file"
+              accept=".pdf,application/pdf"
+              disabled={isIngesting}
+              onChange={handleFileChange}
+            />
 
-          {documentsQuery.isLoading && (
-            <div className="grid gap-4">
-              {Array.from({
-                length: 3,
-              }).map((_, index) => (
-                <Skeleton key={index} className="h-48 w-full rounded-xl" />
-              ))}
-            </div>
-          )}
+            {selectedFile && (
+              <div className="rounded-lg bg-muted p-3 text-sm">
+                <p className="font-medium">{selectedFile.name}</p>
 
-          {documentsQuery.isError && (
-            <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
-              Could not load documents.
-            </div>
-          )}
-
-          {!documentsQuery.isLoading &&
-            !documentsQuery.isError &&
-            documents.length === 0 && (
-              <div className="rounded-xl border border-dashed p-10 text-center">
-                <FileUp className="mx-auto h-8 w-8 text-muted-foreground" />
-
-                <h3 className="mt-4 font-medium">No documents yet</h3>
-
-                <p className="mt-2 text-sm text-muted-foreground">
-                  Upload your first research paper to begin.
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {(selectedFile.size / 1024 / 1024).toFixed(2)} MB
                 </p>
               </div>
             )}
 
-          <div className="grid gap-4">
-            {documents.map((document) => (
-              <DocumentCard
-                key={document.id}
-                document={document}
-                selected={selectedPaperName === document.paper_name}
-                deleting={
-                  deleteMutation.isPending &&
-                  deleteMutation.variables === document.paper_name
-                }
-                onSelect={() => selectPaper(document.paper_name)}
-                onDelete={() => void handleDelete(document.paper_name)}
-                onReingest={() => handleReingest(document.paper_name)}
-              />
-            ))}
-          </div>
-        </section>
+            {error && (
+              <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+                {error}
+              </div>
+            )}
+
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                disabled={!selectedFile || isIngesting}
+                onClick={() => {
+                  if (selectedFile) {
+                    void beginIngestion(selectedFile, false);
+                  }
+                }}
+              >
+                <Upload className="h-4 w-4" />
+
+                {isIngesting ? "Ingesting..." : "Upload and ingest"}
+              </Button>
+            </div>
+          </section>
+
+          <IngestionProgress
+            eventType={ingestionEventType}
+            data={ingestionData}
+            fileName={selectedFile?.name || lastAttemptedFile?.name}
+            isIngesting={isIngesting}
+            canRetry={
+              ingestionEventType === "error" && Boolean(lastAttemptedFile)
+            }
+            onStop={() => void stopIngestion()}
+            onRetry={retryLastIngestion}
+          />
+
+          <section className="space-y-4">
+            <div className="flex items-end justify-between gap-4">
+              <div>
+                <h2 className="text-lg font-semibold">Available papers</h2>
+
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Choose one as the retrieval source for chat.
+                </p>
+              </div>
+
+              <span className="text-sm text-muted-foreground">
+                {documentsQuery.data?.total ?? 0} documents
+              </span>
+            </div>
+
+            {documentsQuery.isLoading && (
+              <div className="grid gap-4">
+                {Array.from({
+                  length: 3,
+                }).map((_, index) => (
+                  <Skeleton key={index} className="h-48 w-full rounded-xl" />
+                ))}
+              </div>
+            )}
+
+            {documentsQuery.isError && (
+              <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
+                Could not load documents.
+              </div>
+            )}
+
+            {!documentsQuery.isLoading &&
+              !documentsQuery.isError &&
+              documents.length === 0 && (
+                <div className="rounded-xl border border-dashed p-10 text-center">
+                  <FileUp className="mx-auto h-8 w-8 text-muted-foreground" />
+
+                  <h3 className="mt-4 font-medium">No documents yet</h3>
+
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    Upload your first research paper to begin.
+                  </p>
+                </div>
+              )}
+
+            <div className="grid gap-4">
+              {documents.map((document) => (
+                <DocumentCard
+                  key={document.id}
+                  document={document}
+                  selected={selectedPaperName === document.paper_name}
+                  deleting={
+                    deleteMutation.isPending &&
+                    deleteMutation.variables === document.paper_name
+                  }
+                  controlsDisabled={anyActionPending}
+                  onSelect={() => selectPaper(document.paper_name)}
+                  onDelete={() => setDeleteTarget(document)}
+                  onReingest={() => handleReingest(document)}
+                />
+              ))}
+            </div>
+          </section>
+        </div>
       </div>
-    </div>
+
+      <DeleteDocumentDialog
+        document={deleteTarget}
+        open={Boolean(deleteTarget)}
+        pending={deleteMutation.isPending}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDeleteTarget(null);
+          }
+        }}
+        onConfirm={handleDeleteConfirm}
+      />
+
+      <OverwriteDocumentDialog
+        open={overwriteDialogOpen}
+        pending={isIngesting}
+        fileName={pendingOverwriteFile?.name}
+        onOpenChange={(open) => {
+          setOverwriteDialogOpen(open);
+
+          if (!open) {
+            setPendingOverwriteFile(null);
+          }
+        }}
+        onConfirm={confirmOverwrite}
+      />
+    </>
   );
 }

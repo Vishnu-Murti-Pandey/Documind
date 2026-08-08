@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 
 import { useSidebarStore } from "./sidebar-store";
+import { ThemeToggle } from "./theme-toggle";
 
 type AppShellProps = {
   children: ReactNode;
@@ -51,6 +52,7 @@ export function AppShell({ children }: AppShellProps) {
           </Button>
 
           <span className="ml-3 font-semibold">DocuMind</span>
+          <div className="ml-auto"><ThemeToggle /></div>
         </header>
 
         <main className="min-h-0 flex-1 overflow-hidden">{children}</main>

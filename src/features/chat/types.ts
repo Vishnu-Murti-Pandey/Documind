@@ -40,16 +40,21 @@ export type TableReference = {
 
 export type ChatMessage = {
   id: string;
-  role: ChatRole;
+
+  role: "user" | "assistant";
+
   content: string;
 
   citations: Citation[];
   figures: FigureReference[];
   tables: TableReference[];
 
-  createdAt?: string;
+  status: "streaming" | "completed" | "failed" | "stopped";
 
-  status?: "pending" | "streaming" | "completed" | "failed";
+  created_at?: string;
+
+  // Used only by the frontend for Retry / Regenerate
+  retryPrompt?: string;
 };
 
 export type ChatStreamStatus = {
@@ -86,6 +91,7 @@ export type ChatMetadata = {
 export type ConversationMessagesResponse = {
   conversation_id: string;
   title: string | null;
+  paper_name: string | null;
 
   messages: Array<{
     id: string;
@@ -97,8 +103,6 @@ export type ConversationMessagesResponse = {
     created_at: string;
   }>;
 
-  page: number;
-  limit: number;
-  total: number;
+  next_cursor: string | null;
   has_more: boolean;
 };

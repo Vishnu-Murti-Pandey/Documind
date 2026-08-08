@@ -127,4 +127,7 @@
   html {
     @apply font-sans;
   }
+  pre, code { max-width: 100%; }
+  pre { overflow-x: auto; }
+  table { max-width: 100%; }
 }

@@ -29,6 +29,8 @@ import {
 } from "@/features/conversations/queries";
 import type { ConversationItem as ConversationItemType } from "@/features/conversations/types";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
+import { ThemeToggle } from "@/components/layout/theme-toggle";
 
 type ConversationSidebarProps = {
   collapsed?: boolean;
@@ -76,7 +78,9 @@ export function ConversationSidebar({
       {
         onSuccess: () => {
           setRenameTarget(null);
+          toast.success("Conversation renamed");
         },
+        onError: (error) => toast.error(error instanceof Error ? error.message : "Could not rename conversation."),
       },
     );
   }
@@ -91,11 +95,13 @@ export function ConversationSidebar({
     deleteMutation.mutate(deletedConversationId, {
       onSuccess: () => {
         setDeleteTarget(null);
+        toast.success("Conversation deleted");
 
         if (pathname === `/chat/${deletedConversationId}`) {
           router.replace("/chat");
         }
       },
+      onError: (error) => toast.error(error instanceof Error ? error.message : "Could not delete conversation."),
     });
   }
 
@@ -251,7 +257,7 @@ export function ConversationSidebar({
 
         <Separator />
 
-        <div className="p-3">
+        <div className="flex flex-col items-center gap-1 p-3">
           {collapsed ? (
             <Tooltip>
               <TooltipTrigger render={documentsLink} />
@@ -261,6 +267,7 @@ export function ConversationSidebar({
           ) : (
             documentsLink
           )}
+          <ThemeToggle showLabel={!collapsed} />
         </div>
       </aside>
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { BookOpen, ChevronDown } from "lucide-react";
+import { BookOpen, Check, ChevronDown } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -14,7 +14,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useDocumentSelectionStore } from "@/features/documents/document-store";
 import { useDocuments } from "@/features/documents/queries";
 
-export function DocumentSelector() {
+type DocumentSelectorProps = {
+  disabled?: boolean;
+};
+
+export function DocumentSelector({ disabled = false }: DocumentSelectorProps) {
   const documentsQuery = useDocuments(0, 50);
 
   const selectedPaperName = useDocumentSelectionStore(
@@ -44,38 +48,52 @@ export function DocumentSelector() {
             type="button"
             size="sm"
             variant="ghost"
-            className="max-w-[240px]"
+            className="max-w-[min(260px,65vw)]"
+            disabled={disabled}
+            aria-label="Select document"
           />
         }
       >
         <BookOpen className="h-4 w-4 shrink-0" />
 
         <span className="truncate">
-          {selectedDocument?.original_filename || "Select document"}
+          {selectedDocument?.original_filename ||
+            selectedPaperName ||
+            "Select document"}
         </span>
 
-        <ChevronDown className="h-4 w-4 shrink-0" />
+        {!disabled && <ChevronDown className="h-4 w-4 shrink-0" />}
       </DropdownMenuTrigger>
 
-      <DropdownMenuContent align="start" className="w-72">
+      <DropdownMenuContent align="start" className="w-[min(20rem,calc(100vw-1rem))]">
         {documents.length === 0 && (
           <DropdownMenuItem disabled>No completed documents</DropdownMenuItem>
         )}
 
-        {documents.map((document) => (
-          <DropdownMenuItem
-            key={document.id}
-            onClick={() => selectPaper(document.paper_name)}
-          >
-            <div className="min-w-0">
-              <p className="truncate text-sm">{document.original_filename}</p>
+        {documents.map((document) => {
+          const selected = document.paper_name === selectedPaperName;
 
-              <p className="truncate text-xs text-muted-foreground">
-                {document.paper_name}
-              </p>
-            </div>
-          </DropdownMenuItem>
-        ))}
+          return (
+            <DropdownMenuItem
+              key={document.id}
+              onClick={() => selectPaper(document.paper_name)}
+            >
+              <div className="flex min-w-0 flex-1 items-center gap-3">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm">
+                    {document.original_filename}
+                  </p>
+
+                  <p className="truncate text-xs text-muted-foreground">
+                    {document.paper_name}
+                  </p>
+                </div>
+
+                {selected && <Check className="h-4 w-4 shrink-0" />}
+              </div>
+            </DropdownMenuItem>
+          );
+        })}
       </DropdownMenuContent>
     </DropdownMenu>
   );

@@ -9,6 +9,19 @@ export type IngestionStreamHandlers = {
   onError?: (error: Error) => void;
 };
 
+export async function cancelDocumentIngestion(
+  documentId: string,
+): Promise<void> {
+  const response = await fetch(
+    `${env.NEXT_PUBLIC_API_URL}/api/ingestion/${encodeURIComponent(documentId)}/cancel`,
+    { method: "POST" },
+  );
+
+  if (!response.ok && response.status !== 404) {
+    throw new Error("Could not stop document ingestion.");
+  }
+}
+
 function extractErrorMessage(body: unknown): string {
   if (
     typeof body === "object" &&
@@ -108,7 +121,7 @@ export async function streamDocumentIngestion(
     }
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {
-      return;
+      throw error;
     }
 
     const normalizedError =

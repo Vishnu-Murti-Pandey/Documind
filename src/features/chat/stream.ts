@@ -10,6 +10,7 @@ import type {
 type ConversationEvent = {
   conversation_id: string;
   is_new: boolean;
+  paper_name: string | null;
 };
 
 type TokenEvent = {
@@ -19,6 +20,7 @@ type TokenEvent = {
 type DoneEvent = {
   status: "completed" | "failed";
   conversation_id: string;
+  paper_name: string | null;
 };
 
 type ErrorEvent = {

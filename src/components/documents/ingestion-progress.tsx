@@ -1,7 +1,14 @@
 "use client";
 
-import { CheckCircle2, CircleX, LoaderCircle } from "lucide-react";
+import {
+  CheckCircle2,
+  CircleX,
+  LoaderCircle,
+  RotateCcw,
+  Square,
+} from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 
 import type {
@@ -13,12 +20,21 @@ type IngestionProgressProps = {
   eventType: IngestionEventType | null;
   data: IngestionEventData | null;
   fileName?: string;
+  isIngesting?: boolean;
+  canRetry?: boolean;
+
+  onStop?: () => void;
+  onRetry?: () => void;
 };
 
 export function IngestionProgress({
   eventType,
   data,
   fileName,
+  isIngesting = false,
+  canRetry = false,
+  onStop,
+  onRetry,
 }: IngestionProgressProps) {
   if (!eventType || !data) {
     return null;
@@ -60,9 +76,15 @@ export function IngestionProgress({
 
       {typeof data.current_chunk === "number" &&
         typeof data.total_chunks === "number" && (
-          <p className="text-xs text-muted-foreground">
-            Chunk {data.current_chunk} of {data.total_chunks}
-          </p>
+          <div className="flex items-center justify-between text-xs text-muted-foreground">
+            <span>
+              Chunk {data.current_chunk} of {data.total_chunks}
+            </span>
+
+            {data.chunk_id && (
+              <span className="max-w-52 truncate">{data.chunk_id}</span>
+            )}
+          </div>
         )}
 
       {completed && (
@@ -88,9 +110,25 @@ export function IngestionProgress({
       )}
 
       {failed && (
-        <p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
-          {data.detail || data.message || "Document ingestion failed."}
-        </p>
+        <div className="space-y-3">
+          <p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            {data.detail || data.message || "Document ingestion failed."}
+          </p>
+
+          {canRetry && onRetry && (
+            <Button type="button" size="sm" variant="outline" onClick={onRetry}>
+              <RotateCcw className="h-4 w-4" />
+              Retry ingestion
+            </Button>
+          )}
+        </div>
+      )}
+
+      {isIngesting && onStop && (
+        <Button type="button" size="sm" variant="outline" onClick={onStop}>
+          <Square className="h-4 w-4" />
+          Stop ingestion
+        </Button>
       )}
     </div>
   );

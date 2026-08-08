@@ -2,7 +2,10 @@
 
 import {
   Check,
+  CircleAlert,
+  Clock3,
   FileText,
+  LoaderCircle,
   RefreshCw,
   Trash2,
   TriangleAlert,
@@ -12,12 +15,13 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-import type { DocumentItem } from "@/features/documents/types";
+import type { DocumentItem, DocumentStatus } from "@/features/documents/types";
 
 type DocumentCardProps = {
   document: DocumentItem;
   selected: boolean;
   deleting: boolean;
+  controlsDisabled?: boolean;
 
   onSelect: () => void;
   onDelete: () => void;
@@ -25,7 +29,7 @@ type DocumentCardProps = {
 };
 
 function formatBytes(bytes: number): string {
-  if (bytes === 0) {
+  if (bytes <= 0) {
     return "0 B";
   }
 
@@ -36,15 +40,52 @@ function formatBytes(bytes: number): string {
     units.length - 1,
   );
 
-  return `${(bytes / 1024 ** index).toFixed(index === 0 ? 0 : 1)} ${
-    units[index]
-  }`;
+  const value = bytes / 1024 ** index;
+
+  return `${value.toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
+}
+
+function getStatusConfig(status: DocumentStatus) {
+  switch (status) {
+    case "completed":
+      return {
+        label: "Completed",
+        icon: Check,
+        className:
+          "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
+      };
+
+    case "processing":
+      return {
+        label: "Processing",
+        icon: LoaderCircle,
+        className:
+          "border-blue-500/30 bg-blue-500/10 text-blue-700 dark:text-blue-400",
+      };
+
+    case "failed":
+      return {
+        label: "Failed",
+        icon: CircleAlert,
+        className: "border-destructive/30 bg-destructive/10 text-destructive",
+      };
+
+    case "pending":
+    default:
+      return {
+        label: "Pending",
+        icon: Clock3,
+        className:
+          "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400",
+      };
+  }
 }
 
 export function DocumentCard({
   document,
   selected,
   deleting,
+  controlsDisabled = false,
   onSelect,
   onDelete,
   onReingest,
@@ -52,6 +93,15 @@ export function DocumentCard({
   const completed = document.status === "completed";
 
   const failed = document.status === "failed";
+
+  const processing = document.status === "processing";
+
+  const statusConfig = getStatusConfig(document.status);
+
+  const StatusIcon = statusConfig.icon;
+
+  const actionsDisabled = controlsDisabled || deleting || processing;
+  const deleteDisabled = controlsDisabled || deleting;
 
   return (
     <article
@@ -68,21 +118,30 @@ export function DocumentCard({
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
-              <h3 className="truncate font-medium">
+              <h3
+                className="truncate font-medium"
+                title={document.original_filename}
+              >
                 {document.original_filename}
               </h3>
 
-              <p className="mt-1 truncate text-xs text-muted-foreground">
+              <p
+                className="mt-1 truncate text-xs text-muted-foreground"
+                title={document.paper_name}
+              >
                 {document.paper_name}
               </p>
             </div>
 
             <Badge
-              variant={
-                completed ? "secondary" : failed ? "destructive" : "outline"
-              }
+              variant="outline"
+              className={cn("gap-1.5", statusConfig.className)}
             >
-              {document.status}
+              <StatusIcon
+                className={cn("h-3.5 w-3.5", processing && "animate-spin")}
+              />
+
+              {statusConfig.label}
             </Badge>
           </div>
 
@@ -91,17 +150,25 @@ export function DocumentCard({
 
             <span>{document.chunks_count ?? 0} chunks</span>
 
+            <span>{document.elements_count ?? 0} elements</span>
+
             <span>
               Updated {new Date(document.updated_at).toLocaleString()}
             </span>
           </div>
 
           {document.error_message && (
-            <div className="mt-3 flex gap-2 rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
+            <div className="mt-4 flex gap-2 rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">
               <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
 
-              <p>{document.error_message}</p>
+              <p className="break-words">{document.error_message}</p>
             </div>
+          )}
+
+          {processing && (
+            <p className="mt-4 text-sm text-muted-foreground">
+              This document is currently being processed.
+            </p>
           )}
 
           <div className="mt-5 flex flex-wrap gap-2">
@@ -109,7 +176,7 @@ export function DocumentCard({
               type="button"
               size="sm"
               variant={selected ? "default" : "outline"}
-              disabled={!completed}
+              disabled={!completed || actionsDisabled}
               onClick={onSelect}
             >
               {selected && <Check className="h-4 w-4" />}
@@ -121,21 +188,27 @@ export function DocumentCard({
               type="button"
               size="sm"
               variant="outline"
+              disabled={actionsDisabled}
               onClick={onReingest}
             >
               <RefreshCw className="h-4 w-4" />
-              Re-ingest
+
+              {failed ? "Retry ingestion" : "Re-ingest"}
             </Button>
 
             <Button
               type="button"
               size="sm"
               variant="ghost"
-              disabled={deleting}
+              disabled={deleteDisabled}
               className="text-destructive hover:text-destructive"
               onClick={onDelete}
             >
-              <Trash2 className="h-4 w-4" />
+              {deleting ? (
+                <LoaderCircle className="h-4 w-4 animate-spin" />
+              ) : (
+                <Trash2 className="h-4 w-4" />
+              )}
 
               {deleting ? "Deleting..." : "Delete"}
             </Button>

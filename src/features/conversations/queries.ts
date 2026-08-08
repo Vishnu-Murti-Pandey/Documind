@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
   deleteConversation,
+  getConversation,
   getConversations,
   renameConversation,
 } from "./api";
@@ -9,8 +10,15 @@ import {
 export const conversationKeys = {
   all: ["conversations"] as const,
 
+  lists: () => [...conversationKeys.all, "list"] as const,
+
   list: (page: number, limit: number) =>
-    [...conversationKeys.all, "list", page, limit] as const,
+    [...conversationKeys.lists(), page, limit] as const,
+
+  details: () => [...conversationKeys.all, "detail"] as const,
+
+  detail: (conversationId: string) =>
+    [...conversationKeys.details(), conversationId] as const,
 
   messages: (conversationId: string) =>
     [...conversationKeys.all, conversationId, "messages"] as const,
@@ -19,11 +27,30 @@ export const conversationKeys = {
 export function useConversations(page = 0, limit = 20) {
   return useQuery({
     queryKey: conversationKeys.list(page, limit),
+
     queryFn: () =>
       getConversations({
         page,
         limit,
       }),
+  });
+}
+
+export function useConversation(conversationId?: string) {
+  return useQuery({
+    queryKey: conversationId
+      ? conversationKeys.detail(conversationId)
+      : [...conversationKeys.details(), "disabled"],
+
+    queryFn: () => {
+      if (!conversationId) {
+        throw new Error("Conversation ID is required.");
+      }
+
+      return getConversation(conversationId);
+    },
+
+    enabled: Boolean(conversationId),
   });
 }
 
@@ -42,9 +69,14 @@ export function useRenameConversation() {
         title,
       }),
 
-    onSuccess: async () => {
+    onSuccess: async (updatedConversation) => {
+      queryClient.setQueryData(
+        conversationKeys.detail(updatedConversation.conversation_id),
+        updatedConversation,
+      );
+
       await queryClient.invalidateQueries({
-        queryKey: conversationKeys.all,
+        queryKey: conversationKeys.lists(),
       });
     },
   });
@@ -56,9 +88,13 @@ export function useDeleteConversation() {
   return useMutation({
     mutationFn: deleteConversation,
 
-    onSuccess: async () => {
+    onSuccess: async (_, conversationId) => {
+      queryClient.removeQueries({
+        queryKey: conversationKeys.detail(conversationId),
+      });
+
       await queryClient.invalidateQueries({
-        queryKey: conversationKeys.all,
+        queryKey: conversationKeys.lists(),
       });
     },
   });

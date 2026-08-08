@@ -1,37 +1,34 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { BookOpen, StopCircle } from "lucide-react";
+import { StopCircle } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 
+import { ChatHeader } from "@/components/chat/chat-header";
+import { ChatHistory } from "@/components/chat/chat-history";
 import { DocumentSelector } from "@/components/documents/document-selector";
-import { useDocumentSelectionStore } from "@/features/documents/document-store";
-
-import {
-  Conversation,
-  ConversationContent,
-  ConversationEmptyState,
-  ConversationScrollButton,
-} from "@/components/ai-elements/conversation";
 import {
   PromptInput,
   PromptInputSubmit,
   PromptInputTextarea,
   type PromptInputMessage,
 } from "@/components/ai-elements/prompt-input";
-import { ChatMessage } from "@/components/chat/chat-message";
 import { Button } from "@/components/ui/button";
-import { conversationKeys } from "@/features/conversations/queries";
+
+import { addOptimisticConversation } from "@/features/conversations/cache";
 import {
-  getConversationMessages,
-  mapPersistedMessages,
-} from "@/features/chat/api";
+  conversationKeys,
+  useConversation,
+} from "@/features/conversations/queries";
+import { chatMessageKeys } from "@/features/chat/queries";
 import { streamChat } from "@/features/chat/stream";
 import type {
   ChatMessage as ChatMessageType,
   ChatMetadata,
   ChatStreamStatus,
 } from "@/features/chat/types";
+import { useDocumentSelectionStore } from "@/features/documents/document-store";
+import { useDocuments } from "@/features/documents/queries";
 
 type ChatClientProps = {
   initialConversationId?: string;
@@ -44,15 +41,30 @@ function createTemporaryId(): string {
 export function ChatClient({ initialConversationId }: ChatClientProps) {
   const queryClient = useQueryClient();
 
+  // ============================================================
+  // Refs
+  // ============================================================
+
   const abortControllerRef = useRef<AbortController | null>(null);
 
   const conversationIdRef = useRef<string | undefined>(initialConversationId);
+
+  const activeAssistantIdRef = useRef<string | null>(null);
+
+  // ============================================================
+  // Local state
+  // ============================================================
 
   const [conversationId, setConversationId] = useState<string | undefined>(
     initialConversationId,
   );
 
-  const [messages, setMessages] = useState<ChatMessageType[]>([]);
+  /**
+   * Only unsynchronized messages created in the current browser
+   * session are held here. Persisted history is loaded separately
+   * by ChatHistory.
+   */
+  const [liveMessages, setLiveMessages] = useState<ChatMessageType[]>([]);
 
   const [input, setInput] = useState("");
 
@@ -60,80 +72,77 @@ export function ChatClient({ initialConversationId }: ChatClientProps) {
     null,
   );
 
-  const [isLoadingHistory, setIsLoadingHistory] = useState(
-    Boolean(initialConversationId),
-  );
-
   const [isStreaming, setIsStreaming] = useState(false);
 
   const [error, setError] = useState<string | null>(null);
+
+  // ============================================================
+  // Document selection
+  // ============================================================
 
   const selectedPaperName = useDocumentSelectionStore(
     (state) => state.selectedPaperName,
   );
 
+  const selectPaper = useDocumentSelectionStore((state) => state.selectPaper);
+
+  const conversationQuery = useConversation(conversationId);
+  const documentsQuery = useDocuments(0, 50);
+  const persistedPaperName = conversationQuery.data?.paper_name;
+  const sourceAvailable =
+    !conversationId ||
+    !persistedPaperName ||
+    documentsQuery.isLoading ||
+    documentsQuery.isError ||
+    Boolean(
+      documentsQuery.data?.items.some(
+        (document) =>
+          document.paper_name === persistedPaperName &&
+          document.status === "completed",
+      ),
+    );
+
+  /**
+   * When an existing conversation is opened, restore the source
+   * document persisted on the conversation.
+   *
+   * This runs in an effect instead of mutating Zustand during
+   * render.
+   */
   useEffect(() => {
-    if (!initialConversationId) {
-      setMessages([]);
-      setConversationId(undefined);
-      setIsLoadingHistory(false);
-      return;
+    const persistedPaperName = conversationQuery.data?.paper_name;
+
+    if (persistedPaperName && persistedPaperName !== selectedPaperName) {
+      selectPaper(persistedPaperName);
     }
+  }, [conversationQuery.data?.paper_name, selectedPaperName, selectPaper]);
 
-    const currentConversationId = initialConversationId;
+  /**
+   * Synchronize refs when the dynamic route changes.
+   */
+  useEffect(() => {
+    conversationIdRef.current = initialConversationId;
 
-    let active = true;
-
-    async function loadHistory() {
-      setIsLoadingHistory(true);
+    const resetState = window.setTimeout(() => {
+      setConversationId(initialConversationId);
+      setLiveMessages([]);
       setError(null);
+      setStreamStatus(null);
+    }, 0);
 
-      try {
-        const response = await getConversationMessages(
-          currentConversationId,
-          0,
-          100,
-        );
-
-        if (!active) {
-          return;
-        }
-
-        setMessages(mapPersistedMessages(response));
-
-        setConversationId(currentConversationId);
-
-        conversationIdRef.current = currentConversationId;
-      } catch (loadError) {
-        if (!active) {
-          return;
-        }
-
-        setError(
-          loadError instanceof Error
-            ? loadError.message
-            : "Could not load conversation.",
-        );
-      } finally {
-        if (active) {
-          setIsLoadingHistory(false);
-        }
-      }
-    }
-
-    void loadHistory();
-
-    return () => {
-      active = false;
-    };
+    return () => window.clearTimeout(resetState);
   }, [initialConversationId]);
+
+  // ============================================================
+  // Message helpers
+  // ============================================================
 
   const updateAssistantMessage = useCallback(
     (
       assistantId: string,
       updater: (message: ChatMessageType) => ChatMessageType,
     ) => {
-      setMessages((currentMessages) =>
+      setLiveMessages((currentMessages) =>
         currentMessages.map((message) =>
           message.id === assistantId ? updater(message) : message,
         ),
@@ -142,24 +151,38 @@ export function ChatClient({ initialConversationId }: ChatClientProps) {
     [],
   );
 
-  async function handleSubmit(promptMessage: PromptInputMessage) {
-    const text = promptMessage.text.trim();
+  const removeLiveMessages = useCallback((messageIds: string[]) => {
+    const ids = new Set(messageIds);
 
-    if (!text || isStreaming || !selectedPaperName) {
+    setLiveMessages((currentMessages) =>
+      currentMessages.filter((message) => !ids.has(message.id)),
+    );
+  }, []);
+
+  // ============================================================
+  // Submit
+  // ============================================================
+
+  async function handleSubmit(promptMessage: PromptInputMessage) {
+    const submittedText = promptMessage.text.trim();
+
+    if (!submittedText || isStreaming || !selectedPaperName) {
       return;
     }
 
+    const userMessageId = createTemporaryId();
+
+    const assistantId = createTemporaryId();
+
     const userMessage: ChatMessageType = {
-      id: createTemporaryId(),
+      id: userMessageId,
       role: "user",
-      content: text,
+      content: submittedText,
       citations: [],
       figures: [],
       tables: [],
       status: "completed",
     };
-
-    const assistantId = createTemporaryId();
 
     const assistantMessage: ChatMessageType = {
       id: assistantId,
@@ -169,9 +192,12 @@ export function ChatClient({ initialConversationId }: ChatClientProps) {
       figures: [],
       tables: [],
       status: "streaming",
+      retryPrompt: submittedText,
     };
 
-    setMessages((currentMessages) => [
+    activeAssistantIdRef.current = assistantId;
+
+    setLiveMessages((currentMessages) => [
       ...currentMessages,
       userMessage,
       assistantMessage,
@@ -191,16 +217,18 @@ export function ChatClient({ initialConversationId }: ChatClientProps) {
 
     let resolvedConversationId = conversationIdRef.current;
 
+    let streamCompleted = false;
+
     try {
       await streamChat(
         {
-          message: text,
+          message: submittedText,
+
           conversation_id: conversationIdRef.current,
-          filter: selectedPaperName
-            ? {
-                paper_name: selectedPaperName,
-              }
-            : null,
+
+          filter: {
+            paper_name: selectedPaperName,
+          },
         },
         {
           onConversation: (data) => {
@@ -210,7 +238,26 @@ export function ChatClient({ initialConversationId }: ChatClientProps) {
 
             setConversationId(data.conversation_id);
 
+            const resolvedPaperName = data.paper_name ?? selectedPaperName;
+
+            if (resolvedPaperName && resolvedPaperName !== selectedPaperName) {
+              selectPaper(resolvedPaperName);
+            }
+
             if (data.is_new) {
+              addOptimisticConversation({
+                queryClient,
+
+                conversationId: data.conversation_id,
+
+                title: submittedText,
+
+                paperName: resolvedPaperName,
+              });
+
+              /**
+               * Change the URL without remounting ChatClient.
+               */
               window.history.replaceState(
                 null,
                 "",
@@ -224,25 +271,36 @@ export function ChatClient({ initialConversationId }: ChatClientProps) {
           },
 
           onToken: (token) => {
+            if (!token) {
+              return;
+            }
+
             updateAssistantMessage(assistantId, (message) => ({
               ...message,
+
               content: message.content + token,
             }));
           },
 
-          onMetadata: (metadata) => {
+          onMetadata: (metadata: ChatMetadata) => {
             updateAssistantMessage(assistantId, (message) => ({
               ...message,
+
               citations: metadata.citations ?? [],
+
               figures: metadata.figures ?? [],
+
               tables: metadata.tables ?? [],
             }));
           },
 
           onDone: (done) => {
+            streamCompleted = done.status === "completed";
+
             updateAssistantMessage(assistantId, (message) => ({
               ...message,
-              status: done.status === "completed" ? "completed" : "failed",
+
+              status: streamCompleted ? "completed" : "failed",
             }));
           },
 
@@ -255,79 +313,143 @@ export function ChatClient({ initialConversationId }: ChatClientProps) {
             }));
           },
         },
+
         abortController.signal,
       );
+
+      // --------------------------------------------------------
+      // Synchronize persisted data
+      // --------------------------------------------------------
 
       await queryClient.invalidateQueries({
         queryKey: conversationKeys.all,
       });
 
       if (resolvedConversationId) {
-        await queryClient.invalidateQueries({
-          queryKey: conversationKeys.messages(resolvedConversationId),
-        });
+        await Promise.all([
+          queryClient.invalidateQueries({
+            queryKey: conversationKeys.detail(resolvedConversationId),
+          }),
+
+          queryClient.invalidateQueries({
+            queryKey: chatMessageKeys.conversation(resolvedConversationId),
+          }),
+        ]);
+      }
+
+      /**
+       * After the database history has been refreshed, remove the
+       * temporary copies so ChatHistory renders persisted messages.
+       */
+      if (streamCompleted && resolvedConversationId) {
+        removeLiveMessages([userMessageId, assistantId]);
+      }
+    } catch (streamError) {
+      const aborted = abortController.signal.aborted;
+
+      if (aborted) {
+        updateAssistantMessage(assistantId, (message) => ({
+          ...message,
+          status: "stopped",
+        }));
+
+        setError(null);
+      } else {
+        const message =
+          streamError instanceof Error
+            ? streamError.message
+            : "Chat request failed.";
+
+        setError(message);
+
+        updateAssistantMessage(assistantId, (currentMessage) => ({
+          ...currentMessage,
+          status: "failed",
+        }));
       }
     } finally {
       abortControllerRef.current = null;
+
+      activeAssistantIdRef.current = null;
+
       setIsStreaming(false);
       setStreamStatus(null);
     }
   }
 
+  function retryResponse(prompt: string) {
+    if (!isStreaming && sourceAvailable) {
+      void handleSubmit({ text: prompt, files: [] });
+    }
+  }
+
+  // ============================================================
+  // Stop generation
+  // ============================================================
+
   function stopStreaming() {
+    const assistantId = activeAssistantIdRef.current;
+
     abortControllerRef.current?.abort();
 
     abortControllerRef.current = null;
 
-    setIsStreaming(false);
+    if (assistantId) {
+      updateAssistantMessage(assistantId, (message) => ({
+        ...message,
+        status: "stopped",
+      }));
+    }
 
+    setIsStreaming(false);
     setStreamStatus(null);
   }
 
-  if (isLoadingHistory) {
-    return (
-      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        Loading conversation...
-      </div>
-    );
-  }
+  // ============================================================
+  // Render
+  // ============================================================
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <Conversation className="min-h-0 flex-1">
-        <ConversationContent className="mx-auto w-full max-w-4xl gap-6 px-4 py-8 md:px-8">
-          {messages.length === 0 ? (
-            <ConversationEmptyState
-              icon={<BookOpen className="h-8 w-8" />}
-              title="Ask your research papers"
-              description="Upload a paper, choose it as your source, and ask detailed questions."
-            />
-          ) : (
-            messages.map((message) => (
-              <ChatMessage key={message.id} message={message} />
-            ))
-          )}
+      <ChatHeader
+        conversationId={conversationId}
+        fallbackPaperName={selectedPaperName}
+      />
 
-          {streamStatus && (
-            <div className="ml-1 text-xs text-muted-foreground">
-              {streamStatus.message}
-            </div>
-          )}
+      <ChatHistory
+        conversationId={conversationId}
+        liveMessages={liveMessages}
+        onRetry={retryResponse}
+      />
 
-          {error && (
-            <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-              {error}
-            </div>
-          )}
-        </ConversationContent>
+      {streamStatus && (
+        <div className="shrink-0 border-t px-4 py-2 text-center text-xs text-muted-foreground">
+          {streamStatus.message}
+        </div>
+      )}
 
-        <ConversationScrollButton />
-      </Conversation>
+      {error && (
+        <div className="shrink-0 px-4 pt-3">
+          <div className="mx-auto max-w-4xl rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+            {error}
+          </div>
+        </div>
+      )}
 
-      <div className="shrink-0 border-t bg-background px-4 py-4">
+      {!sourceAvailable && (
+        <div className="shrink-0 border-t border-amber-500/30 bg-amber-500/10 px-4 py-3 text-center text-sm">
+          <p className="font-medium">Source document unavailable</p>
+          <p className="text-muted-foreground">
+            Historical answers and citations are still visible. New questions
+            cannot be submitted in this conversation.
+          </p>
+        </div>
+      )}
+
+      <div className="shrink-0 border-t bg-background px-3 py-3 sm:px-4 sm:py-4">
         <div className="mx-auto max-w-4xl">
-          <div className="mb-2 flex items-center justify-between gap-3">
-            <DocumentSelector />
+          <div className="mb-2 flex min-w-0 items-center justify-between gap-2">
+            <DocumentSelector disabled={Boolean(conversationId)} />
 
             {!selectedPaperName && (
               <span className="text-xs text-amber-600">
@@ -348,7 +470,7 @@ export function ChatClient({ initialConversationId }: ChatClientProps) {
                   ? "Ask about the selected paper..."
                   : "Select a document first..."
               }
-              disabled={isStreaming || !selectedPaperName}
+              disabled={isStreaming || !selectedPaperName || !sourceAvailable}
               className="min-h-14 resize-none"
             />
 
@@ -371,7 +493,7 @@ export function ChatClient({ initialConversationId }: ChatClientProps) {
                 </Button>
               ) : (
                 <PromptInputSubmit
-                  disabled={!input.trim() || !selectedPaperName}
+                  disabled={!input.trim() || !selectedPaperName || !sourceAvailable}
                 />
               )}
             </div>
