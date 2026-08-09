@@ -7,6 +7,7 @@ all application configuration in one place.
 
 import os
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from dotenv import load_dotenv
 
@@ -87,6 +88,19 @@ DEBUG = (
     == "true"
 )
 
+ALLOWED_ORIGINS = [
+    origin.strip().rstrip("/")
+    for origin in os.getenv(
+        "ALLOWED_ORIGINS",
+        "http://localhost:3000",
+    ).split(",")
+    if origin.strip()
+]
+
+CORS_ORIGIN_REGEX = os.getenv(
+    "CORS_ORIGIN_REGEX",
+) or None
+
 
 # ============================================================
 # Project Directories
@@ -148,9 +162,32 @@ EMBEDDING_MODEL = os.getenv(
 # PostgreSQL
 # ============================================================
 
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-)
+def _normalize_database_url(value: str | None) -> str | None:
+    """Convert provider PostgreSQL URLs into SQLAlchemy asyncpg URLs."""
+
+    if not value:
+        return None
+
+    if value.startswith("postgres://"):
+        value = "postgresql://" + value.removeprefix("postgres://")
+
+    if value.startswith("postgresql://"):
+        value = "postgresql+asyncpg://" + value.removeprefix("postgresql://")
+
+    parts = urlsplit(value)
+    query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    sslmode = query.pop("sslmode", None)
+    query.pop("channel_binding", None)
+
+    if sslmode and "ssl" not in query:
+        query["ssl"] = sslmode
+
+    return urlunsplit(
+        (parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment)
+    )
+
+
+DATABASE_URL = _normalize_database_url(os.getenv("DATABASE_URL"))
 
 DATABASE_ECHO = (
     os.getenv(
@@ -159,6 +196,9 @@ DATABASE_ECHO = (
     ).lower()
     == "true"
 )
+
+DATABASE_POOL_SIZE = int(os.getenv("DATABASE_POOL_SIZE", "5"))
+DATABASE_MAX_OVERFLOW = int(os.getenv("DATABASE_MAX_OVERFLOW", "10"))
 
 
 # ============================================================
@@ -191,6 +231,10 @@ MINIO_SECURE = (
     == "true"
 )
 
+MINIO_REGION = os.getenv(
+    "MINIO_REGION",
+) or None
+
 
 # ============================================================
 # Qdrant
@@ -198,6 +242,17 @@ MINIO_SECURE = (
 
 QDRANT_URL = os.getenv(
     "QDRANT_URL",
+)
+
+QDRANT_API_KEY = os.getenv(
+    "QDRANT_API_KEY",
+) or None
+
+QDRANT_TIMEOUT_SECONDS = int(
+    os.getenv(
+        "QDRANT_TIMEOUT_SECONDS",
+        "30",
+    )
 )
 
 QDRANT_SPARSE_TEXT_EMBEDDING = os.getenv(

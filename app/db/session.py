@@ -12,6 +12,8 @@ from sqlalchemy.ext.asyncio import (
 
 from app.config import (
     DATABASE_ECHO,
+    DATABASE_MAX_OVERFLOW,
+    DATABASE_POOL_SIZE,
     DATABASE_URL,
 )
 from app.db.base import Base
@@ -34,8 +36,8 @@ engine = create_async_engine(
     DATABASE_URL,
     echo=DATABASE_ECHO,
     pool_pre_ping=True,
-    pool_size=10,
-    max_overflow=20,
+    pool_size=DATABASE_POOL_SIZE,
+    max_overflow=DATABASE_MAX_OVERFLOW,
     pool_recycle=1800,
 )
 

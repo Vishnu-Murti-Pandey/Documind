@@ -1,8 +1,4 @@
-"""
-MinIO Storage Client.
-
-Responsible for interacting with MinIO object storage.
-"""
+"""S3-compatible object storage for local MinIO and Cloudflare R2."""
 
 from datetime import timedelta
 from io import BytesIO
@@ -15,7 +11,9 @@ from app.config import (
     MINIO_ACCESS_KEY,
     MINIO_BUCKET,
     MINIO_ENDPOINT,
+    MINIO_REGION,
     MINIO_SECRET_KEY,
+    MINIO_SECURE,
 )
 
 
@@ -32,7 +30,8 @@ class MinioStorage:
             endpoint=MINIO_ENDPOINT,
             access_key=MINIO_ACCESS_KEY,
             secret_key=MINIO_SECRET_KEY,
-            secure=False,
+            secure=MINIO_SECURE,
+            region=MINIO_REGION,
         )
 
         if create_bucket:

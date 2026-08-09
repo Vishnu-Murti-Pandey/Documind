@@ -1,0 +1,13 @@
+.git
+.venv
+.uv-cache
+__pycache__
+*.py[cod]
+.env
+.env.*
+!.env.production.example
+data
+tests
+docker
+docker-compose*.yml
+*.log
