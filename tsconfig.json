@@ -30,5 +30,15 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": ["node_modules"]
+  "exclude": [
+    "node_modules",
+    "src/components/ai-elements/agent.tsx",
+    "src/components/ai-elements/attachments.tsx",
+    "src/components/ai-elements/context.tsx",
+    "src/components/ai-elements/inline-citation.tsx",
+    "src/components/ai-elements/plan.tsx",
+    "src/components/ai-elements/reasoning.tsx",
+    "src/components/ai-elements/schema-display.tsx",
+    "src/components/ai-elements/voice-selector.tsx"
+  ]
 }

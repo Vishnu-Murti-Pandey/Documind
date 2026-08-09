@@ -3,6 +3,7 @@
 Enterprise document chat UI built with Next.js. Users can upload PDF documents, follow ingestion progress, start document-bound conversations, stream grounded answers, inspect citations and figures, and revisit infinite conversation history.
 
 See [ARCHITECTURE.md](./ARCHITECTURE.md) for state ownership, component boundaries, and streaming data flows.
+See [DEPLOYMENT.md](./DEPLOYMENT.md) for Vercel production deployment.
 
 ## Features
 
