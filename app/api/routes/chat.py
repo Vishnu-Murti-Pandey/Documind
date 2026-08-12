@@ -12,7 +12,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.schemas.chat_request import ChatRequest
 from app.api.schemas.chat_response import ChatResponse
 from app.db.session import get_db_session
-from app.services.chat_service import ChatService
 
 
 router = APIRouter()
@@ -31,6 +30,9 @@ async def chat(
     """
     Complete JSON chat endpoint.
     """
+
+    # Keep local reranking model imports out of API startup.
+    from app.services.chat_service import ChatService
 
     service = ChatService(
         session=session
@@ -51,6 +53,8 @@ async def stream_chat(
     """
     SSE streaming chat endpoint.
     """
+
+    from app.services.chat_service import ChatService
 
     service = ChatService(
         session=session

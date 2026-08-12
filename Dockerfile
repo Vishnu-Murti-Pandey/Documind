@@ -3,7 +3,6 @@ FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     UV_CACHE_DIR=/tmp/uv-cache
 
@@ -27,4 +26,4 @@ COPY app ./app
 
 EXPOSE 10000
 
-CMD ["sh", "-c", "uv run uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-10000}"]
+CMD ["sh", "-c", "/app/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-10000}"]

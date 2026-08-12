@@ -16,7 +16,6 @@ from app.repositories.document_repository import (
     DocumentRepository,
 )
 from app.storage.minio_storage import MinioStorage
-from app.vectorstore.store import VectorStore
 
 
 class DocumentNotFoundError(Exception):
@@ -40,7 +39,6 @@ class DocumentService:
             session
         )
 
-        self.vector_store = VectorStore()
         self.storage = MinioStorage()
 
     @staticmethod
@@ -224,9 +222,15 @@ class DocumentService:
         Both clients are synchronous, so they run in threads.
         """
 
+        # Listing documents does not need FastEmbed. Load vector support only
+        # for destructive cleanup operations.
+        from app.vectorstore.store import VectorStore
+
+        vector_store = VectorStore()
+
         await asyncio.gather(
             asyncio.to_thread(
-                self.vector_store.delete_by_paper_name,
+                vector_store.delete_by_paper_name,
                 paper_name,
             ),
             asyncio.to_thread(

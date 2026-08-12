@@ -38,6 +38,7 @@ from app.enrichment.table_enricher import TableEnricher
 from app.parser.pdf_parser import PDFParser
 from app.vectorstore.collection import CollectionManager
 from app.vectorstore.store import VectorStore
+from app.exceptions import IngestionCancelledError
 
 
 logger = logging.getLogger(__name__)
@@ -473,7 +474,3 @@ class IngestionPipeline:
                     "detail": str(exc),
                 },
             }
-
-
-class IngestionCancelledError(Exception):
-    """Raised after an ingestion cancellation signal is observed."""

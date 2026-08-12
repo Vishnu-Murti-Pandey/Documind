@@ -36,7 +36,7 @@ from app.config import (
     MAX_UPLOAD_SIZE_MB,
 )
 from app.db.session import get_db_session
-from app.ingest import IngestionPipeline, IngestionCancelledError
+from app.exceptions import IngestionCancelledError
 from app.repositories.document_repository import DocumentRepository
 from app.services.document_service import (
     DocumentService,
@@ -264,6 +264,9 @@ async def stream_ingestion(
         ) from exc
 
     cancel_event = threading.Event()
+    # Keep ONNX and document-processing imports out of API startup.
+    from app.ingest import IngestionPipeline
+
     pipeline = IngestionPipeline(cancel_event=cancel_event)
     _active_ingestions[document.id] = cancel_event
 
