@@ -130,16 +130,27 @@ class MinioStorage:
             attention-paper/
         """
 
-        objects = self.client.list_objects(
-            bucket_name=self.bucket_name,
-            prefix=prefix,
-            recursive=True,
-        )
+        try:
+            objects = self.client.list_objects(
+                bucket_name=self.bucket_name,
+                prefix=prefix,
+                recursive=True,
+            )
 
-        object_names = [
-            item.object_name
-            for item in objects
-        ]
+            object_names = [
+                item.object_name
+                for item in objects
+            ]
+        except S3Error as exc:
+            if exc.code in {
+                "NoSuchBucket",
+                "NoSuchKey",
+                "NoSuchObject",
+                "NotFound",
+            }:
+                return 0
+
+            raise
 
         if not object_names:
             return 0

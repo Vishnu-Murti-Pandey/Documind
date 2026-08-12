@@ -15,7 +15,6 @@ from qdrant_client.models import (
 from app.models.vector_document import VectorDocument
 from app.vectorstore.client import VectorClient
 from app.vectorstore.collection import COLLECTION_NAME
-from app.vectorstore.sparse_encoder import SparseEncoder
 from qdrant_client.models import SparseVector
 
 
@@ -24,7 +23,18 @@ class VectorStore:
     def __init__(self):
 
         self.client = VectorClient().client
-        self.sparse = SparseEncoder()
+        self._sparse = None
+
+    @property
+    def sparse(self):
+        """Initialize sparse encoding only for vector insertion."""
+
+        if self._sparse is None:
+            from app.vectorstore.sparse_encoder import SparseEncoder
+
+            self._sparse = SparseEncoder()
+
+        return self._sparse
 
     def insert(
         self,
@@ -80,7 +90,15 @@ class VectorStore:
     ) -> None:
         """
         Delete every vector belonging to one paper.
+
+        Cleanup is idempotent: a fresh Qdrant project has no collection yet,
+        and deleting a stale PostgreSQL document must still succeed.
         """
+
+        if not self.client.collection_exists(
+            collection_name=COLLECTION_NAME,
+        ):
+            return
 
         self.client.delete(
             collection_name=COLLECTION_NAME,
