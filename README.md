@@ -3,7 +3,7 @@
 FastAPI backend for Documind, a document-aware chat application. It ingests PDF files, extracts and enriches text, figures, and tables, indexes the result for hybrid retrieval, streams grounded answers, and persists conversation history.
 
 See [ARCHITECTURE.md](./ARCHITECTURE.md) for component boundaries, storage ownership, and end-to-end data flows.
-See [DEPLOYMENT.md](./DEPLOYMENT.md) for Render, Neon, Qdrant Cloud, and Cloudflare R2 deployment.
+See [DEPLOYMENT.md](./DEPLOYMENT.md) for Oracle Cloud, Neon, Qdrant Cloud, and Cloudflare R2 deployment.
 
 ## Features
 

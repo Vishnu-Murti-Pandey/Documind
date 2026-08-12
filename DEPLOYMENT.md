@@ -1,107 +1,166 @@
 # Production Deployment
 
-This guide deploys FastAPI to Render with Neon PostgreSQL, Qdrant Cloud, and
-Cloudflare R2. Deploy the Next.js application to Vercel using the companion
-frontend deployment guide.
+This guide runs the complete FastAPI and multimodal PDF pipeline on an Oracle
+Cloud Always Free Ampere A1 VM. Durable data remains in Neon PostgreSQL,
+Qdrant Cloud, and Cloudflare R2; the Next.js application remains on Vercel.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
     Browser --> Vercel[Next.js on Vercel]
-    Vercel --> Render[FastAPI on Render]
-    Render --> Neon[(Neon PostgreSQL)]
-    Render --> Qdrant[(Qdrant Cloud)]
-    Render --> R2[(Cloudflare R2)]
-    Render --> OpenAI[OpenAI APIs]
+    Vercel --> Caddy[Caddy HTTPS on Oracle]
+    Caddy --> API[FastAPI container]
+    API --> Neon[(Neon PostgreSQL)]
+    API --> Qdrant[(Qdrant Cloud)]
+    API --> R2[(Cloudflare R2)]
+    API --> OpenAI[OpenAI APIs]
 ```
 
 ## 0. Rotate exposed credentials
 
-The former local `.env.prod` contained plaintext credentials. Revoke its
-OpenAI key and rotate any password or storage credential copied from that file
-before deploying. Never upload dotenv files or commit them to Git.
+Rotate any Neon password, R2 access key, Qdrant API key, or OpenAI key that was
+ever committed or copied into a tracked example file. Put only placeholders in
+Git. Production secrets belong only in the VM's untracked `.env.production`.
 
-## 1. Neon PostgreSQL
+## 1. Create the Oracle VM
 
-1. Create a Neon project and database.
-2. Copy the pooled connection string from the Connect dialog.
-3. Keep `sslmode=require`. The backend converts `postgresql://` to the
-   `postgresql+asyncpg://` dialect, maps `sslmode` to `ssl`, and removes the
-   unsupported `channel_binding` connection parameter.
-4. Save the complete string as Render's `DATABASE_URL` secret.
+1. Create an Oracle Cloud account and choose the home region carefully.
+2. Create an `VM.Standard.A1.Flex` Always Free instance with Ubuntu 24.04.
+3. Allocate the full Always Free allowance: 2 OCPUs and 12 GB RAM.
+4. Add an SSH public key and download/save the corresponding private key.
+5. Reserve the instance's public IP so it does not change.
+6. In the subnet security list or network security group, allow inbound TCP
+   ports 22, 80, and 443. Do not expose the application port directly.
 
-The application currently creates missing tables at startup. Introduce Alembic
-migrations before changing the schema of a live database.
+The A1 shape is ARM64. Build the image on this VM so Docker selects ARM64
+packages. Do not pull an x86-only image built elsewhere.
 
-## 2. Qdrant Cloud
+## 2. Install Docker
 
-1. Create a cluster near the chosen Render region.
-2. Create a database/cluster API key, not a Cloud management key.
-3. Save the HTTPS cluster endpoint as `QDRANT_URL` and the key as
-   `QDRANT_API_KEY` in Render.
-4. Do not enable IP restrictions unless the Render service has a stable
-   outbound IP.
+SSH into the instance and install Docker from Docker's official Ubuntu
+repository. Add the Ubuntu user to the `docker` group, then sign out and back
+in so the new group applies. Verify with:
 
-The backend creates its collection on the first ingestion.
+```bash
+docker version
+docker compose version
+```
 
-## 3. Cloudflare R2
+## 3. Copy the backend and configure secrets
 
-1. Create an R2 bucket such as `documind-documents`.
-2. Create an R2 API token scoped to that bucket with Object Read & Write.
-3. Record the token's Access Key ID and Secret Access Key.
-4. Configure Render:
+Clone the backend branch/repository on the VM, then enter its directory:
 
-   ```dotenv
-   MINIO_ENDPOINT=ACCOUNT_ID.r2.cloudflarestorage.com
-   MINIO_ACCESS_KEY=R2_ACCESS_KEY_ID
-   MINIO_SECRET_KEY=R2_SECRET_ACCESS_KEY
-   MINIO_BUCKET=documind-documents
-   MINIO_SECURE=true
-   MINIO_REGION=auto
-   ```
+```bash
+git clone --branch backend BACKEND_GIT_URL documind-backend
+cd documind-backend
+cp .env.production.example .env.production
+chmod 600 .env.production
+```
 
-The `MINIO_*` names remain for local compatibility. The client uses the
-S3-compatible protocol and connects to R2 over TLS.
+Edit `.env.production` and set every provider credential. In particular:
 
-## 4. Render
+```dotenv
+ENVIRONMENT=production
+DEBUG=false
+LOW_MEMORY_MODE=false
+ALLOWED_ORIGINS=https://documind-labs.vercel.app
+DATABASE_URL=postgresql://USER:PASSWORD@NEON_POOLED_HOST/DATABASE?sslmode=require
+MINIO_ENDPOINT=ACCOUNT_ID.r2.cloudflarestorage.com
+MINIO_ACCESS_KEY=R2_ACCESS_KEY_ID
+MINIO_SECRET_KEY=R2_SECRET_ACCESS_KEY
+MINIO_BUCKET=documind-documents
+MINIO_SECURE=true
+MINIO_REGION=auto
+QDRANT_URL=https://YOUR_CLUSTER.cloud.qdrant.io:6333
+QDRANT_API_KEY=QDRANT_DATABASE_API_KEY
+OPENAI_API_KEY=OPENAI_API_KEY
+HF_TOKEN=HUGGING_FACE_TOKEN
+```
 
-1. Push the backend repository to a supported Git provider.
-2. Create a Render Blueprint from `render.yaml`.
-3. Supply every value marked `sync: false` using
-   `.env.production.example` as the checklist.
-4. Set `ALLOWED_ORIGINS` to the final Vercel origin without a trailing slash,
-   for example `https://documind.vercel.app`.
-5. Deploy and wait for `GET /api/health` to pass.
-6. Verify `GET /api/health/database` separately.
+`LOW_MEMORY_MODE=false` preserves the complete ingestion and retrieval
+pipeline.
 
-The Docker image installs Poppler and Tesseract. The Blueprint initially uses
-Render's Free web-service plan so a demo can be created without billing
-details. Free services sleep when idle and have tight memory/CPU limits; PDF
-parsing and local cross-encoder reranking may exceed those limits. Upgrade the
-service if builds, startup, or ingestion are terminated for memory usage.
-Render's filesystem is ephemeral; only temporary ingestion files are local,
-while durable state lives in Neon, Qdrant, and R2.
+## 4. Build and run FastAPI
 
-## 5. Connect Vercel
+Build locally on the ARM VM and run with a restart policy:
 
-After Render assigns the API URL:
+```bash
+docker build -t documind-api:latest .
+docker run -d --name documind-api --restart unless-stopped \
+  --env-file .env.production \
+  -p 127.0.0.1:10000:10000 \
+  documind-api:latest
+```
 
-1. Set Vercel's `NEXT_PUBLIC_API_URL` to the Render origin without a trailing
-   slash, such as `https://documind-api.onrender.com`.
-2. Set Render's `ALLOWED_ORIGINS` to the final Vercel origin.
-3. Redeploy both services after changing build-time frontend variables.
+Check startup and health:
+
+```bash
+docker logs -f documind-api
+curl http://127.0.0.1:10000/api/health
+curl http://127.0.0.1:10000/api/health/database
+```
+
+Binding to `127.0.0.1` ensures only the HTTPS reverse proxy can reach Uvicorn.
+
+## 5. Add HTTPS with Caddy
+
+Point a DNS record such as `api.example.com` to the VM's reserved public IP.
+Install Caddy and create `/etc/caddy/Caddyfile`:
+
+```caddyfile
+api.example.com {
+    reverse_proxy 127.0.0.1:10000
+}
+```
+
+Then validate and restart it:
+
+```bash
+sudo caddy validate --config /etc/caddy/Caddyfile
+sudo systemctl restart caddy
+sudo systemctl status caddy
+```
+
+Caddy obtains and renews the TLS certificate automatically. Test:
+
+```bash
+curl https://api.example.com/api/health
+```
+
+## 6. Connect Vercel
+
+1. In Vercel, open the frontend project and go to Settings > Environment
+   Variables.
+2. Replace `NEXT_PUBLIC_API_URL` with `https://api.example.com`, without a
+   trailing slash.
+3. Apply it to Production and any desired Preview environments.
+4. Redeploy the frontend because `NEXT_PUBLIC_API_URL` is embedded at build
+   time.
+5. Keep the exact Vercel URL in the backend's `ALLOWED_ORIGINS`. After changing
+   the backend environment file, recreate the container.
+
+## 7. Updating the backend
+
+```bash
+git pull --ff-only
+docker build -t documind-api:latest .
+docker rm -f documind-api
+docker run -d --name documind-api --restart unless-stopped \
+  --env-file .env.production \
+  -p 127.0.0.1:10000:10000 \
+  documind-api:latest
+```
+
+Removing this application container does not remove data in Neon, Qdrant, or
+R2.
 
 ## Release verification
 
-- `GET /api/health` and `GET /api/health/database` succeed.
-- All provider endpoints use TLS.
-- No secret uses a `NEXT_PUBLIC_` name.
-- A PDF completes ingestion and creates Qdrant points.
-- A cited figure redirects through the asset route to an R2 presigned URL.
-- A chat retrieves evidence and persists its messages in Neon.
-- The production Vercel URL is allowed by backend CORS.
-- Provider backups, usage alerts, and billing limits are enabled.
-
-Render and Vercel retain prior application deploys for rollback. Application
-rollback does not reverse data or schema changes.
+- Both health endpoints return success over HTTPS.
+- The browser reports no CORS or mixed-content errors.
+- A PDF completes ingestion with text, tables, and images enabled.
+- Qdrant receives points and R2 receives documents and extracted assets.
+- A chat streams tokens, retrieves evidence, and persists messages in Neon.
+- A cited figure opens through the backend's R2 presigned redirect.
+- Reboot the VM once and confirm the container and Caddy return automatically.
