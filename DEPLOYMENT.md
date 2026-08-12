@@ -75,10 +75,13 @@ S3-compatible protocol and connects to R2 over TLS.
 5. Deploy and wait for `GET /api/health` to pass.
 6. Verify `GET /api/health/database` separately.
 
-The Docker image installs Poppler and Tesseract. The Standard plan is selected
-because PDF parsing and local cross-encoder reranking are CPU- and
-memory-intensive. Render's filesystem is ephemeral; only temporary ingestion
-files are local, while durable state lives in Neon, Qdrant, and R2.
+The Docker image installs Poppler and Tesseract. The Blueprint initially uses
+Render's Free web-service plan so a demo can be created without billing
+details. Free services sleep when idle and have tight memory/CPU limits; PDF
+parsing and local cross-encoder reranking may exceed those limits. Upgrade the
+service if builds, startup, or ingestion are terminated for memory usage.
+Render's filesystem is ephemeral; only temporary ingestion files are local,
+while durable state lives in Neon, Qdrant, and R2.
 
 ## 5. Connect Vercel
 
