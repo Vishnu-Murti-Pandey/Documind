@@ -9,6 +9,7 @@ Combines:
 """
 
 import asyncio
+import math
 
 from qdrant_client.models import (
     Fusion,
@@ -46,8 +47,10 @@ class Retriever:
             search_filter
         )
 
+        sparse_vector = self._normalized_sparse_vector(query)
+
         try:
-            if query.sparse_indices and query.sparse_values:
+            if sparse_vector is not None:
                 response = self.client.query_points(
                     collection_name=COLLECTION_NAME,
                     prefetch=[
@@ -57,10 +60,7 @@ class Retriever:
                             limit=30,
                         ),
                         Prefetch(
-                            query=SparseVector(
-                                indices=query.sparse_indices,
-                                values=query.sparse_values,
-                            ),
+                            query=sparse_vector,
                             using="sparse",
                             limit=30,
                         ),
@@ -90,7 +90,21 @@ class Retriever:
                 exc.status_code,
                 exc.content,
             )
-            raise
+            if exc.status_code != 400 or sparse_vector is None:
+                raise
+
+            logger.warning(
+                "Qdrant rejected hybrid retrieval; retrying with the dense "
+                "query for this request."
+            )
+            response = self.client.query_points(
+                collection_name=COLLECTION_NAME,
+                query=query.dense,
+                using="dense",
+                query_filter=qdrant_filter,
+                limit=top_k,
+                with_payload=True,
+            )
 
         results: list[SearchResult] = []
 
@@ -114,6 +128,44 @@ class Retriever:
             )
 
         return results
+
+    @staticmethod
+    def _normalized_sparse_vector(
+        query: QueryEmbedding,
+    ) -> SparseVector | None:
+        """Return a valid, deterministic sparse vector for Qdrant."""
+
+        if len(query.sparse_indices) != len(query.sparse_values):
+            logger.warning(
+                "Sparse query indices and values have different lengths; "
+                "using dense retrieval."
+            )
+            return None
+
+        weights: dict[int, float] = {}
+        for index, value in zip(
+            query.sparse_indices,
+            query.sparse_values,
+            strict=True,
+        ):
+            index = int(index)
+            value = float(value)
+            if index < 0 or not math.isfinite(value) or value == 0.0:
+                continue
+            weights[index] = weights.get(index, 0.0) + value
+
+        normalized = sorted(
+            (index, value)
+            for index, value in weights.items()
+            if math.isfinite(value) and value != 0.0
+        )
+        if not normalized:
+            return None
+
+        return SparseVector(
+            indices=[index for index, _ in normalized],
+            values=[value for _, value in normalized],
+        )
 
     async def retrieve_async(
         self,
