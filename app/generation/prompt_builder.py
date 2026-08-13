@@ -169,4 +169,7 @@ Instructions
 10. Do not generate citations or a Sources section.
 11. Write in clear technical language.
 12. Use bullet points only when they improve clarity.
+13. Write mathematical expressions in readable plain text using Unicode when
+    useful, for example `1/√dₖ` and `QKᵀ`. Never output raw LaTeX commands
+    such as `\\frac`, `\\sqrt`, `\\text`, `\\left`, or `\\right`.
 """.strip()
