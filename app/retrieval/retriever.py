@@ -90,7 +90,12 @@ class Retriever:
                 exc.status_code,
                 exc.content,
             )
-            if exc.status_code != 400 or sparse_vector is None:
+            error_content = exc.content.lower()
+            if (
+                exc.status_code != 400
+                or sparse_vector is None
+                or b"sparse" not in error_content
+            ):
                 raise
 
             logger.warning(

@@ -2,6 +2,7 @@
 FastAPI application entry point.
 """
 
+import asyncio
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
@@ -23,6 +24,7 @@ from app.db.session import (
     create_database_tables,
     dispose_engine,
 )
+from app.vectorstore.collection import CollectionManager
 from app.api.routes.conversations import (
     router as conversations_router,
 )
@@ -44,6 +46,12 @@ async def lifespan(
 
     # Create PostgreSQL tables that do not already exist.
     await create_database_tables()
+
+    # Existing Qdrant collections may predate the payload indexes required
+    # for document-bound and page-range retrieval filters.
+    await asyncio.to_thread(
+        CollectionManager().create
+    )
 
     yield
 
