@@ -16,6 +16,8 @@ from qdrant_client.models import (
     Prefetch,
     SparseVector,
 )
+from qdrant_client.http.exceptions import UnexpectedResponse
+from loguru import logger
 
 from app.models.query import QueryEmbedding
 from app.models.search_filter import SearchFilter
@@ -44,30 +46,51 @@ class Retriever:
             search_filter
         )
 
-        response = self.client.query_points(
-            collection_name=COLLECTION_NAME,
-            prefetch=[
-                Prefetch(
+        try:
+            if query.sparse_indices and query.sparse_values:
+                response = self.client.query_points(
+                    collection_name=COLLECTION_NAME,
+                    prefetch=[
+                        Prefetch(
+                            query=query.dense,
+                            using="dense",
+                            limit=30,
+                        ),
+                        Prefetch(
+                            query=SparseVector(
+                                indices=query.sparse_indices,
+                                values=query.sparse_values,
+                            ),
+                            using="sparse",
+                            limit=30,
+                        ),
+                    ],
+                    query=FusionQuery(
+                        fusion=Fusion.RRF,
+                    ),
+                    query_filter=qdrant_filter,
+                    limit=top_k,
+                    with_payload=True,
+                )
+            else:
+                logger.warning(
+                    "Sparse query embedding was empty; using dense retrieval."
+                )
+                response = self.client.query_points(
+                    collection_name=COLLECTION_NAME,
                     query=query.dense,
                     using="dense",
-                    limit=30,
-                ),
-                Prefetch(
-                    query=SparseVector(
-                        indices=query.sparse_indices,
-                        values=query.sparse_values,
-                    ),
-                    using="sparse",
-                    limit=30,
-                ),
-            ],
-            query=FusionQuery(
-                fusion=Fusion.RRF,
-            ),
-            query_filter=qdrant_filter,
-            limit=top_k,
-            with_payload=True,
-        )
+                    query_filter=qdrant_filter,
+                    limit=top_k,
+                    with_payload=True,
+                )
+        except UnexpectedResponse as exc:
+            logger.error(
+                "Qdrant retrieval failed with status {}: {}",
+                exc.status_code,
+                exc.content,
+            )
+            raise
 
         results: list[SearchResult] = []
 
